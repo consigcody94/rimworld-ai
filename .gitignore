@@ -1,0 +1,5 @@
+mod/Source/**/bin/
+mod/Source/**/obj/
+mcp/node_modules/
+mcp/dist/
+.DS_Store

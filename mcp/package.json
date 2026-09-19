@@ -1,0 +1,23 @@
+{
+  "name": "rimworld-mcp-server",
+  "version": "0.1.0",
+  "description": "MCP server that lets AI agents (Claude Code, Antigravity, Codex, Gemini CLI, any MCP client) observe and play RimWorld through the RimWorld AI Bridge mod.",
+  "type": "module",
+  "bin": { "rimworld-mcp-server": "dist/index.js" },
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && chmod +x dist/index.js",
+    "start": "node dist/index.js",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "engines": { "node": ">=18" },
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.20.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  }
+}

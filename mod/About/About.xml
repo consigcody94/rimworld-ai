@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ModMetaData>
+  <name>RimWorld AI Bridge</name>
+  <author>consigcody94</author>
+  <packageId>consigcody94.rimworldaibridge</packageId>
+  <supportedVersions>
+    <li>1.6</li>
+  </supportedVersions>
+  <description>Exposes a local HTTP + JSON API (127.0.0.1:18800 by default) so AI agents (Claude Code, Antigravity, Codex, any MCP client) can observe the colony and issue orders: draft, move, attack, work priorities, designations, building, zones, bills, research, saves, screenshots. All game access is marshalled onto the main thread. Settings: Options > Mod Settings > RimWorld AI Bridge.</description>
+  <loadAfter>
+    <li>Ludeon.RimWorld</li>
+    <li>Ludeon.RimWorld.Royalty</li>
+    <li>Ludeon.RimWorld.Ideology</li>
+    <li>Ludeon.RimWorld.Biotech</li>
+    <li>Ludeon.RimWorld.Anomaly</li>
+    <li>Ludeon.RimWorld.Odyssey</li>
+  </loadAfter>
+</ModMetaData>
