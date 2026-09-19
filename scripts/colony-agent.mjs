@@ -170,6 +170,15 @@ export class ColonyAgent {
     const activeHostiles = hostiles.filter((h) => !h.downed && !h.dead);
     const hasThreat = activeHostiles.length > 0;
 
+    // 0. Zero-Pause Stall Protocol: Instant unpause & dialog dismissal
+    if (snap.paused || snap.forcePaused) {
+      try {
+        await api.post("/dialog/close", { all: true });
+        await api.post("/letter/dismiss", { all: true });
+        await this.setGameSpeed(hasThreat ? 1 : this.speed);
+      } catch {}
+    }
+
     // 2. High-Priority: "On Your Feet" Tactical Defense Protocol
     if (hasThreat) {
       console.log(`[ALERT] ${activeHostiles.length} active hostiles detected! Switching to high-speed tactical defense.`);
@@ -239,9 +248,15 @@ export class ColonyAgent {
       await this.advanceResearch(research?.project);
     }
 
-    // 8. Power Infrastructure Management
+    // 8. Power Infrastructure Management & Base Expansion
     if (this.turnCount % 10 === 2) {
       await this.managePowerGrid();
+    }
+    if (this.turnCount % 20 === 5) {
+      await this.manageBaseExpansion();
+    }
+    if (this.turnCount % 30 === 8) {
+      await this.maintainColonyPriorities();
     }
 
     // 9. Daily Autosave
@@ -378,14 +393,19 @@ export class ColonyAgent {
 
   async designateWoodChopping() {
     try {
-      const res = await api.get("/things?def=Tree&rect=70,80,45,45&limit=30");
-      const trees = res.things ?? [];
-      const mature = trees.filter((t) => (t.growth ?? 0) >= 0.8).slice(0, 10);
+      // Find harvestable cacti or trees in desert
+      const res = await api.get("/things?cat=Plant&rect=70,70,70,70&limit=50");
+      const plants = res.things ?? [];
+      const mature = plants.filter((p) => {
+        const isTree = p.tree || (p.def && (p.def.includes("Cactus") || p.def.includes("Tree")));
+        return isTree && ((p.growth ?? 0) >= 0.6 || p.harvestable);
+      }).slice(0, 6);
+
       if (mature.length > 0) {
         const ids = mature.map((t) => t.id);
         await api.post("/designate", { type: "chop", things: ids });
-        console.log(`[FORESTRY] Designated ${ids.length} mature trees for lumber.`);
-        await reportThought(`[Forestry] Designated ${ids.length} mature trees for lumber.`);
+        console.log(`[FORESTRY] Designated ${ids.length} desert plants/cacti for lumber.`);
+        await reportThought(`[Forestry] Designated ${ids.length} desert plants for lumber.`);
       }
     } catch (e) {
       console.warn(`[FORESTRY WARN] Could not designate trees: ${e.message}`);
@@ -394,9 +414,8 @@ export class ColonyAgent {
 
   async manageSupplies() {
     try {
-      if (this.unallowWild) {
-        await api.post("/forbid", { all: true, forbidden: true });
-      }
+      // Ensure base area is added to home area
+      await api.post("/area/home", { rect: { x: 70, z: 80, w: 60, h: 50 }, add: true });
 
       if (this.allowMode === "home") {
         const res = await api.post("/allow", { home: true });
@@ -406,16 +425,19 @@ export class ColonyAgent {
           "ComponentIndustrial",
           "WoodLog",
           "Steel",
+          "Chemfuel",
+          "Silver",
+          "Gun_BoltActionRifle",
+          "Gun_Revolver",
+          "MeleeWeapon_Knife",
         ];
         for (const def of vitals) {
           await api.post("/allow", { all: true, def });
         }
-        console.log(`[ALLOW TOOL] Unallowed wild map drops; allowed ${res.matched ?? 0} home area items.`);
-        await reportThought(`[Allow Tool] Unallowed wild map drops; protected ${res.matched ?? 0} home supplies.`);
+        console.log(`[ALLOW TOOL] Protected ${res.matched ?? 0} home supplies.`);
       } else if (this.allowMode === "all") {
         const res = await api.post("/allow", { all: true });
         console.log(`[ALLOW TOOL] Allowed all items across map (${res.changed ?? 0} changed).`);
-        await reportThought(`[Allow Tool] Allowed all items across the map.`);
       }
     } catch (e) {
       console.warn(`[ALLOW TOOL WARN] Could not manage supplies: ${e.message}`);
@@ -427,32 +449,60 @@ export class ColonyAgent {
       const colonists = snap.colonists ?? [];
       const hostiles = (snap.hostiles ?? []).filter((h) => !h.downed && !h.dead);
 
+      // In combat: Track active hostile or shooter
       if (hostiles.length > 0) {
         const target = hostiles[0];
-        await api.post("/camera", { x: target.x ?? 88, z: target.z ?? 109, zoom: 22 });
+        await api.post("/camera", { x: target.x ?? 110, z: target.z ?? 108, zoom: 20 });
         await api.post("/select", { pawn: target.id });
         return;
       }
 
-      // Follow active working colonist (e.g. constructing, chopping, tending)
-      const activePawn = colonists.find((c) => c.doing && !c.doing.includes("sleeping") && !c.doing.includes("standing") && !c.doing.includes("resting"));
-      if (activePawn && this.turnCount % 3 === 0) {
-        await api.post("/camera", { x: activePawn.x, z: activePawn.z, zoom: 20 });
-        await api.post("/select", { pawn: activePawn.id });
-        return;
+      if (colonists.length === 0) return;
+
+      // Group colonists by engagement/interest level
+      const highInterest = colonists.filter((c) => {
+        const d = (c.doing ?? "").toLowerCase();
+        return (
+          d.includes("construct") ||
+          d.includes("build") ||
+          d.includes("sow") ||
+          d.includes("plant") ||
+          d.includes("harvest") ||
+          d.includes("cook") ||
+          d.includes("research") ||
+          d.includes("craft") ||
+          d.includes("chop") ||
+          d.includes("cut") ||
+          d.includes("mine") ||
+          d.includes("tend") ||
+          d.includes("shoot") ||
+          d.includes("equip")
+        );
+      });
+
+      const mediumInterest = colonists.filter((c) => {
+        const d = (c.doing ?? "").toLowerCase();
+        return d.includes("haul") || d.includes("ingest") || d.includes("eat") || d.includes("play") || d.includes("horseshoe");
+      });
+
+      let targetColonist = null;
+      if (highInterest.length > 0) {
+        // Rotate smoothly between active workers every 6 turns
+        const idx = Math.floor(this.turnCount / 6) % highInterest.length;
+        targetColonist = highInterest[idx];
+      } else if (mediumInterest.length > 0) {
+        const idx = Math.floor(this.turnCount / 6) % mediumInterest.length;
+        targetColonist = mediumInterest[idx];
+      } else {
+        // When sleeping or wandering, cycle between colonists every 8 turns
+        const idx = Math.floor(this.turnCount / 8) % colonists.length;
+        targetColonist = colonists[idx];
       }
 
-      // Smooth cinematic showcase cycling for stream audience
-      if (this.turnCount % 12 === 0) {
-        const showcaseSpots = [
-          { x: 88, z: 109, zoom: 24, label: "Base Core" },
-          { x: 88, z: 116, zoom: 18, label: "Private Bedrooms" },
-          { x: 89, z: 94, zoom: 22, label: "Rice Farms" },
-          { x: 96, z: 112, zoom: 20, label: "Power Grid" },
-          { x: 97, z: 106, zoom: 22, label: "Defense Killbox" },
-        ];
-        const spot = showcaseSpots[(Math.floor(this.turnCount / 12)) % showcaseSpots.length];
-        await api.post("/camera", { x: spot.x, z: spot.z, zoom: spot.zoom });
+      if (targetColonist) {
+        // Move camera directly onto the active colonist and select them in UI
+        await api.post("/camera", { x: targetColonist.x, z: targetColonist.z, zoom: 19 });
+        await api.post("/select", { pawn: targetColonist.id });
       }
     } catch {}
   }
@@ -518,6 +568,70 @@ export class ColonyAgent {
       }
     } catch (err) {
       console.warn(`[POWER WARN] Could not manage power grid: ${err.message}`);
+    }
+  }
+
+  async maintainColonyPriorities() {
+    try {
+      const snap = await api.get("/pawns?role=colonist&detail=1");
+      const pawns = snap.pawns ?? [];
+      for (const p of pawns) {
+        const skills = p.skills ?? {};
+        const isCook = (skills.Cooking ?? 0) >= 6;
+        const isBuilder = (skills.Construction ?? 0) >= 3;
+        const isResearcher = (skills.Intellectual ?? 0) >= 5;
+        const isDoctor = (skills.Medicine ?? 0) >= 4;
+        const isWarden = (skills.Social ?? 0) >= 8;
+        const isGrower = (skills.Plants ?? 0) >= 3;
+
+        const priorities = {
+          Firefighter: 1,
+          Patient: 1,
+          PatientBedRest: 1,
+        };
+
+        if (isDoctor) priorities.Doctor = 1;
+        if (isWarden) priorities.Warden = 1;
+        if (isCook) priorities.Cooking = 1;
+        if (isBuilder) priorities.Construction = 1;
+        if (isGrower) {
+          priorities.Growing = 2;
+          priorities.PlantCutting = 1;
+        }
+        if (isResearcher) priorities.Research = 2;
+        priorities.Hauling = 3;
+        priorities.Cleaning = 3;
+
+        try {
+          await api.post("/work/bulk", { pawn: p.id, priorities });
+        } catch {}
+      }
+    } catch (e) {
+      console.warn(`[PRIORITIES WARN] Could not update priorities: ${e.message}`);
+    }
+  }
+
+  async manageBaseExpansion() {
+    try {
+      const buildings = await api.get("/things/summary?cat=Building&player=1");
+      const builtDefs = new Set((buildings.groups ?? []).map((g) => g.def));
+
+      // Add simple cooking bill to FueledStove if built
+      if (builtDefs.has("FueledStove")) {
+        const stoves = await api.get("/things?def=FueledStove&player=1");
+        for (const s of stoves.things ?? []) {
+          try {
+            await api.post("/bill", {
+              thing: s.id,
+              recipe: "CookMealSimple",
+              mode: "target",
+              count: 25,
+            });
+          } catch {}
+        }
+      }
+    } catch (e) {
+      console.warn(`[BASE EXPANSION WARN] Could not manage base expansion: ${e.message}`);
     }
   }
 

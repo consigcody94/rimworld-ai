@@ -3,6 +3,7 @@ mod/Source/**/obj/
 mcp/node_modules/
 mcp/dist/
 stream-app/node_modules/
+stream-app/bin/
 .env
 *.env
 .tokens.json
