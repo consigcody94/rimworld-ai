@@ -1,12 +1,31 @@
 /**
  * Hardware-Accelerated FFmpeg Streaming Engine
- * Uses macOS avfoundation and h264_videotoolbox for low-CPU 1080p60 / 720p60 Twitch broadcasting.
+ *
+ * Pipeline
+ *   capture-window (ScreenCaptureKit)
+ *     fd 1 -> raw BGRA 1920x1080 @ 30 fps  -> ffmpeg pipe:0
+ *     fd 3 -> float32 PCM 48 kHz stereo    -> ffmpeg pipe:3   (system/desktop audio)
+ *     fd 2 -> status lines                 -> forwarded to our stderr + parsed
+ *
+ * ScreenCaptureKit already scales and letterboxes onto a fixed 1920x1080 canvas,
+ * so ffmpeg does no scale/pad work: it just encodes with h264_videotoolbox.
+ *
+ * There is deliberately no avfoundation input: the microphone is never opened.
  */
 
 import { spawn, execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import path from "node:path";
 
 const CAPTURE_BIN = fileURLToPath(new URL("./bin/capture-window", import.meta.url));
+
+const CANVAS_WIDTH = 1920;
+const CANVAS_HEIGHT = 1080;
+const AUDIO_RATE = 48000;
+const AUDIO_CHANNELS = 2;
+
+const RESTART_DELAY_MS = 3000;
+const MAX_RESTARTS = 5;
 
 export class StreamEngine {
   constructor(options = {}) {
@@ -14,10 +33,19 @@ export class StreamEngine {
     this.ingestServer = options.ingestServer ?? "rtmp://live.twitch.tv/app";
     this.fps = options.fps ?? 30;
     this.bitrate = options.bitrate ?? "4500k";
-    this.resolution = options.resolution ?? "1920x1080";
+    this.resolution = options.resolution ?? `${CANVAS_WIDTH}x${CANVAS_HEIGHT}`;
     this.deviceIndex = options.deviceIndex ?? "3";
+
     this.captureChild = null;
     this.child = null;
+
+    // Restart bookkeeping
+    this.requested = false;      // true between start() and stop()
+    this.stopping = false;       // true while stop() is tearing things down
+    this.restartCount = 0;
+    this.restartTimer = null;
+    this.lastStartArgs = null;   // { key, testFile } so a restart can replay it
+
     this.stats = {
       running: false,
       fps: 0,
@@ -27,6 +55,7 @@ export class StreamEngine {
       time: "00:00:00",
       startedAt: null,
       error: null,
+      captureState: "idle", // "capturing" | "window-lost" | "idle"
     };
     this.listeners = new Set();
   }
@@ -44,21 +73,38 @@ export class StreamEngine {
     }
   }
 
-  start(customKey = null) {
+  /**
+   * @param {string|null} customKey Twitch stream key (ignored when testFile is set)
+   * @param {{testFile?: string}} [opts] write to a local .flv/.mp4 instead of RTMP
+   */
+  start(customKey = null, opts = {}) {
     if (this.child || this.captureChild) {
       throw new Error("Stream is already active.");
     }
 
-    const key = customKey || this.streamKey;
-    if (!key) {
-      throw new Error("Missing Twitch Stream Key. Configure it in settings or .env.");
+    const testFile = opts.testFile ?? null;
+    let key = null;
+    if (!testFile) {
+      key = customKey || this.streamKey;
+      if (!key) {
+        throw new Error("Missing Twitch Stream Key. Configure it in settings or .env.");
+      }
     }
 
-    const rtmpUrl = `${this.ingestServer}/${key}`;
+    this.requested = true;
+    this.stopping = false;
+    this.restartCount = 0;
+    this.lastStartArgs = { key: customKey, testFile };
 
-    // 1. Detect RimWorld window dimensions dynamically
-    let winWidth = 1680;
-    let winHeight = 1920;
+    this.launch(key, testFile);
+    return { ok: true, status: testFile ? "recording" : "broadcasting" };
+  }
+
+  /** Spawns capture + ffmpeg. Used by start() and by the auto-restart path. */
+  launch(key, testFile) {
+    // Canvas geometry is fixed by the capture binary; --dims is the source of truth.
+    let width = CANVAS_WIDTH;
+    let height = CANVAS_HEIGHT;
     try {
       const out = execFileSync(CAPTURE_BIN, ["--dims"], { encoding: "utf8", timeout: 5000 }).trim();
       const parts = out.split(/\s+/);
@@ -66,54 +112,105 @@ export class StreamEngine {
         const w = parseInt(parts[0], 10);
         const h = parseInt(parts[1], 10);
         if (w > 200 && h > 200) {
-          winWidth = w;
-          winHeight = h;
+          width = w;
+          height = h;
         }
       }
     } catch (e) {
-      console.warn(`[StreamEngine] Warning: Could not detect window dims, defaulting to ${winWidth}x${winHeight}: ${e.message}`);
+      console.warn(`[StreamEngine] Warning: --dims failed, using ${width}x${height}: ${e.message}`);
     }
 
-    console.log(`[StreamEngine] Target RimWorld Window Size: ${winWidth}x${winHeight}`);
+    console.log(`[StreamEngine] Output canvas: ${width}x${height} @ ${this.fps}fps (ScreenCaptureKit scales + letterboxes)`);
 
-    // 2. Launch native ScreenCaptureKit capture process (stdout = raw BGRA frames)
-    this.captureChild = spawn(CAPTURE_BIN, [], { stdio: ["ignore", "pipe", "inherit"] });
+    // 1. Native ScreenCaptureKit capture: fd1 = video, fd2 = status, fd3 = audio.
+    //    fd2 is piped (not inherited) purely so captureState can be parsed; every
+    //    chunk is forwarded verbatim to our own stderr, so it still behaves as if
+    //    it were inherited.
+    this.captureChild = spawn(CAPTURE_BIN, [], {
+      stdio: ["ignore", "pipe", "pipe", "pipe"],
+    });
+    const audioPipe = this.captureChild.stdio[3];
 
-    // 3. Launch FFmpeg reading raw frames from stdin and encoding via VideoToolbox
-    const vfFilter = "scale=-2:1080,pad=1920:1080:(1920-iw)/2:(1080-ih)/2:black,format=yuv420p";
+    let target;
+    let outputFormat;
+    if (testFile) {
+      target = path.resolve(testFile);
+      outputFormat = target.toLowerCase().endsWith(".mp4") ? "mp4" : "flv";
+      console.log(`[StreamEngine] TEST MODE: writing ${outputFormat} to ${target}`);
+    } else {
+      target = `${this.ingestServer}/${key}`;
+      outputFormat = "flv";
+    }
+
+    // 2. FFmpeg: raw video on pipe:0, raw PCM on pipe:3, VideoToolbox H.264 + AAC.
     const args = [
       "-y",
+      // video input
+      "-thread_queue_size", "512",
       "-f", "rawvideo",
       "-pixel_format", "bgra",
-      "-video_size", `${winWidth}x${winHeight}`,
+      "-video_size", `${width}x${height}`,
       "-framerate", String(this.fps),
-      "-i", "-",
-      "-f", "lavfi",
-      "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+      "-i", "pipe:0",
+      // audio input (system audio from ScreenCaptureKit, never the microphone)
+      "-thread_queue_size", "512",
+      "-f", "f32le",
+      "-ar", String(AUDIO_RATE),
+      "-ac", String(AUDIO_CHANNELS),
+      "-i", "pipe:3",
+      // video encode
       "-c:v", "h264_videotoolbox",
-      "-vf", vfFilter,
+      "-realtime", "1",
       "-b:v", this.bitrate,
-      "-maxrate", "6000k",
-      "-bufsize", "12000k",
+      "-maxrate", this.bitrate,
+      "-bufsize", "9000k",
       "-g", String(this.fps * 2),
+      "-pix_fmt", "yuv420p",
+      // audio encode
       "-c:a", "aac",
       "-b:a", "160k",
-      "-ar", "44100",
-      "-f", "flv",
-      rtmpUrl,
+      "-ar", String(AUDIO_RATE),
     ];
+    if (outputFormat === "mp4") {
+      args.push("-movflags", "+faststart");
+    }
+    args.push("-f", outputFormat, target);
 
-    console.log(`[StreamEngine] Spawning FFmpeg with hardware encoding (h264_videotoolbox)...`);
-    this.child = spawn("ffmpeg", args, { stdio: ["pipe", "pipe", "pipe"] });
+    console.log(`[StreamEngine] Spawning FFmpeg (h264_videotoolbox + aac, no microphone input)...`);
+    this.child = spawn("ffmpeg", args, { stdio: ["pipe", "pipe", "pipe", "pipe"] });
 
-    // Pipe captured frames into FFmpeg stdin
+    // 3. Wire the two media pipes.
     this.captureChild.stdout.pipe(this.child.stdin);
+    if (audioPipe && this.child.stdio[3]) {
+      audioPipe.pipe(this.child.stdio[3]);
+      audioPipe.on("error", () => {});
+      this.child.stdio[3].on("error", () => {});
+    } else {
+      console.warn("[StreamEngine] Warning: audio pipe unavailable; stream will have no audio.");
+    }
+    this.captureChild.stdout.on("error", () => {});
+    this.child.stdin.on("error", () => {});
 
     this.stats.running = true;
     this.stats.startedAt = Date.now();
     this.stats.error = null;
+    this.stats.captureState = "window-lost";
     this.emitStats();
 
+    // 4. Capture status lines -> stats.captureState (and straight through to stderr).
+    let captureBuf = "";
+    this.captureChild.stderr.on("data", (chunk) => {
+      const text = chunk.toString();
+      process.stderr.write(text);
+      captureBuf += text;
+      const lines = captureBuf.split("\n");
+      captureBuf = lines.pop() ?? "";
+      for (const line of lines) {
+        this.parseCaptureStatus(line);
+      }
+    });
+
+    // 5. FFmpeg progress lines -> stats.
     let stderrBuf = "";
     this.child.stderr.on("data", (chunk) => {
       stderrBuf += chunk.toString();
@@ -123,45 +220,101 @@ export class StreamEngine {
         const lastLine = lines[lines.length - 2];
         this.parseFfmpegStats(lastLine);
       }
+      if (stderrBuf.length > 65536) stderrBuf = stderrBuf.slice(-4096);
     });
-
-    const cleanup = () => {
-      if (this.captureChild) {
-        try { this.captureChild.kill("SIGINT"); } catch {}
-        this.captureChild = null;
-      }
-      if (this.child) {
-        try { this.child.kill("SIGINT"); } catch {}
-        this.child = null;
-      }
-      this.stats.running = false;
-      this.stats.startedAt = null;
-      this.emitStats();
-    };
 
     this.child.on("close", (code) => {
       console.log(`[StreamEngine] FFmpeg process exited with code ${code}`);
-      cleanup();
+      const wasRequested = this.requested && !this.stopping;
+      this.teardown();
+      if (wasRequested && code !== 0 && code !== null) {
+        this.scheduleRestart(`ffmpeg exited with code ${code}`);
+      } else if (!wasRequested) {
+        this.requested = false;
+      }
     });
 
     this.captureChild.on("close", (code) => {
       console.log(`[StreamEngine] Capture process exited with code ${code}`);
-      cleanup();
+      // ffmpeg sees EOF on stdin and exits on its own; its close handler decides
+      // whether to restart.
+      if (this.child) {
+        try { this.child.stdin.end(); } catch {}
+      }
+      this.captureChild = null;
     });
 
     this.child.on("error", (err) => {
       console.error("[StreamEngine] FFmpeg process error:", err);
       this.stats.error = err.message;
-      cleanup();
+      this.emitStats();
     });
 
     this.captureChild.on("error", (err) => {
       console.error("[StreamEngine] Capture process error:", err);
       this.stats.error = err.message;
-      cleanup();
+      this.emitStats();
     });
+  }
 
-    return { ok: true, status: "broadcasting" };
+  parseCaptureStatus(line) {
+    if (!line) return;
+    if (line.startsWith("READY") || line.startsWith("WINDOW REACQUIRED") || line.startsWith("WINDOW RESIZED")) {
+      if (this.stats.captureState !== "capturing") {
+        this.stats.captureState = "capturing";
+        this.emitStats();
+      }
+    } else if (line.startsWith("WINDOW LOST")) {
+      if (this.stats.captureState !== "window-lost") {
+        this.stats.captureState = "window-lost";
+        this.emitStats();
+      }
+    }
+  }
+
+  scheduleRestart(reason) {
+    if (!this.requested) return;
+    if (this.restartCount >= MAX_RESTARTS) {
+      this.stats.error = `${reason}; giving up after ${MAX_RESTARTS} restart attempts`;
+      this.requested = false;
+      this.stats.captureState = "idle";
+      this.emitStats();
+      console.error(`[StreamEngine] ${this.stats.error}`);
+      return;
+    }
+    this.restartCount += 1;
+    this.stats.error = `${reason}; restarting (attempt ${this.restartCount}/${MAX_RESTARTS}) in ${RESTART_DELAY_MS / 1000}s`;
+    this.emitStats();
+    console.error(`[StreamEngine] ${this.stats.error}`);
+
+    if (this.restartTimer) clearTimeout(this.restartTimer);
+    this.restartTimer = setTimeout(() => {
+      this.restartTimer = null;
+      if (!this.requested || this.child || this.captureChild) return;
+      const { key, testFile } = this.lastStartArgs ?? {};
+      try {
+        this.launch(testFile ? null : (key || this.streamKey), testFile ?? null);
+      } catch (e) {
+        this.stats.error = `restart failed: ${e.message}`;
+        this.emitStats();
+      }
+    }, RESTART_DELAY_MS);
+  }
+
+  /** Kills whatever is left and resets the live half of stats. */
+  teardown() {
+    if (this.captureChild) {
+      try { this.captureChild.kill("SIGINT"); } catch {}
+      this.captureChild = null;
+    }
+    if (this.child) {
+      try { this.child.kill("SIGINT"); } catch {}
+      this.child = null;
+    }
+    this.stats.running = false;
+    this.stats.startedAt = null;
+    this.stats.captureState = "idle";
+    this.emitStats();
   }
 
   parseFfmpegStats(line) {
@@ -181,25 +334,45 @@ export class StreamEngine {
   }
 
   stop() {
-    if (!this.child && !this.captureChild) return { ok: true, status: "idle" };
+    this.requested = false;
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
+    if (!this.child && !this.captureChild) {
+      this.stats.running = false;
+      this.stats.captureState = "idle";
+      return { ok: true, status: "idle" };
+    }
 
     console.log("[StreamEngine] Stopping broadcast gracefully...");
-    if (this.captureChild) {
-      try { this.captureChild.kill("SIGINT"); } catch {}
+    this.stopping = true;
+
+    // Closing the capture process first lets ffmpeg flush and finalize the file.
+    const capture = this.captureChild;
+    const ff = this.child;
+    if (capture) {
+      try { capture.kill("SIGINT"); } catch {}
     }
-    if (this.child) {
-      try { this.child.kill("SIGINT"); } catch {}
+    if (ff) {
+      try { ff.stdin.end(); } catch {}
+      try { ff.kill("SIGINT"); } catch {}
     }
 
-    const killTimeout = setTimeout(() => {
-      if (this.captureChild) {
+    setTimeout(() => {
+      if (capture === this.captureChild && this.captureChild) {
         try { this.captureChild.kill("SIGKILL"); } catch {}
         this.captureChild = null;
       }
-      if (this.child) {
+      if (ff === this.child && this.child) {
         try { this.child.kill("SIGKILL"); } catch {}
         this.child = null;
       }
+      this.stats.running = false;
+      this.stats.startedAt = null;
+      this.stats.captureState = "idle";
+      this.stopping = false;
+      this.emitStats();
     }, 3000);
 
     return { ok: true, status: "stopping" };

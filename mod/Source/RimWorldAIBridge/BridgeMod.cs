@@ -69,9 +69,13 @@ namespace RimWorldAIBridge
             {
                 Application.runInBackground = true;
                 Prefs.RunInBackground = true;
+                Prefs.AdaptiveTrainingEnabled = false;
+                Prefs.SmoothCameraJumps = true;
+                try { Prefs.Save(); } catch { }
                 MainThread.EnsurePump();
                 EventLog.Install();
                 MainThread.OnEveryFrame(ApplyPendingColonyName);
+                MainThread.OnEveryFrame(FollowCamera.Update);
                 Start(force: false);
             }
             catch (Exception e)
@@ -106,13 +110,28 @@ namespace RimWorldAIBridge
 
         private static void ApplyPendingColonyName()
         {
+            if (Current.Game == null || Current.ProgramState != ProgramState.Playing || Find.World == null || RimWorld.Faction.OfPlayer == null) return;
+
+            if (Routes.PendingNeolithicTech)
+            {
+                try
+                {
+                    RimWorld.Faction.OfPlayer.def.techLevel = RimWorld.TechLevel.Neolithic;
+                }
+                catch {}
+                Routes.PendingNeolithicTech = false;
+            }
+
             string name = Routes.PendingColonyName;
-            if (name == null || Current.Game == null || Current.ProgramState != ProgramState.Playing || Find.World == null || RimWorld.Faction.OfPlayer == null) return;
+            if (name == null) return;
             try
             {
                 RimWorld.Faction.OfPlayer.Name = name;
                 var settlement = Find.WorldObjects?.Settlements?.Find(x => x.Faction == RimWorld.Faction.OfPlayer);
-                if (settlement != null) settlement.Name = name;
+                if (settlement != null)
+                {
+                    settlement.Name = name;
+                }
             }
             catch (Exception e) { Log.Warning("[RimWorldAIBridge] could not apply colony name: " + e.Message); }
             Routes.PendingColonyName = null;

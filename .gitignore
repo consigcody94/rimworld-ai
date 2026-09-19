@@ -8,3 +8,5 @@ stream-app/bin/
 *.env
 .tokens.json
 .DS_Store
+Vocello/
+stream-app/.voice-cache/

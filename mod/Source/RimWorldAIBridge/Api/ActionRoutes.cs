@@ -154,6 +154,48 @@ namespace RimWorldAIBridge
                 return Bridge.Ok("pawn", Serializers.Pawn(p, true));
             });
 
+            Doc(s, "ANY", "/pawn/schedule", "Configure colonist 24h timetable. {pawn, preset:'optimal' | hours:['Sleep', ...]} Presets: optimal, joy, work.", r =>
+            {
+                var map = Lookup.MapFrom(r); var p = Lookup.PawnFrom(r, map);
+                if (p.timetable == null) throw new BridgeException(p.LabelShort + " has no timetable.");
+
+                string preset = r.Arg("preset");
+                if (!string.IsNullOrEmpty(preset))
+                {
+                    if (preset.Equals("optimal", StringComparison.OrdinalIgnoreCase))
+                    {
+                        for (int h = 0; h <= 5; h++) p.timetable.SetAssignment(h, TimeAssignmentDefOf.Sleep);
+                        p.timetable.SetAssignment(6, TimeAssignmentDefOf.Anything);
+                        for (int h = 7; h <= 19; h++) p.timetable.SetAssignment(h, TimeAssignmentDefOf.Work);
+                        p.timetable.SetAssignment(20, TimeAssignmentDefOf.Joy);
+                        p.timetable.SetAssignment(21, TimeAssignmentDefOf.Joy);
+                        p.timetable.SetAssignment(22, TimeAssignmentDefOf.Sleep);
+                        p.timetable.SetAssignment(23, TimeAssignmentDefOf.Sleep);
+                    }
+                    else if (preset.Equals("joy", StringComparison.OrdinalIgnoreCase))
+                    {
+                        for (int h = 0; h < 24; h++) p.timetable.SetAssignment(h, TimeAssignmentDefOf.Joy);
+                    }
+                }
+                else if (r.HasArg("hours"))
+                {
+                    var hrs = Json.List(r.Body, "hours");
+                    if (hrs != null)
+                    {
+                        for (int h = 0; h < Math.Min(24, hrs.Count); h++)
+                        {
+                            string defName = hrs[h]?.ToString();
+                            var def = DefDatabase<TimeAssignmentDef>.GetNamedSilentFail(defName);
+                            if (def != null) p.timetable.SetAssignment(h, def);
+                        }
+                    }
+                }
+
+                var current = new List<string>();
+                for (int h = 0; h < 24; h++) current.Add(p.timetable.GetAssignment(h)?.defName);
+                return Bridge.Ok("pawn", p.thingIDNumber, "timetable", current);
+            });
+
             Doc(s, "ANY", "/bed/settings", "Configure a bed. {thing: bedId, forPrisoners: bool, medical: bool}", r =>
             {
                 var map = Lookup.MapFrom(r);
@@ -384,7 +426,17 @@ namespace RimWorldAIBridge
                 {
                     if (w is RimWorld.Dialog_GiveName gn)
                     {
-                        gn.OnAcceptKeyPressed();
+                        string colonyName = Faction.OfPlayer?.Name ?? "Caveman Empire";
+                        try
+                        {
+                            var mNamed = typeof(RimWorld.Dialog_GiveName).GetMethod("Named", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                            mNamed?.Invoke(gn, new object[] { colonyName });
+                            var mSecond = typeof(RimWorld.Dialog_GiveName).GetMethod("NamedSecond", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                            mSecond?.Invoke(gn, new object[] { colonyName });
+                        }
+                        catch {}
+                        gn.Close(false);
+                        ws.TryRemove(gn);
                         n++;
                         if (!r.ArgBool("all")) break;
                         continue;
@@ -398,13 +450,73 @@ namespace RimWorldAIBridge
                 return Bridge.Ok("closed", n);
             });
 
-            Doc(s, "ANY", "/camera", "Move the camera. {x, z, zoom:10..60}. Also selects nothing. Useful before /screenshot.", r =>
+            Doc(s, "ANY", "/camera", "Move the camera. {x, z, zoom:10..60, pawn, follow:bool}. Smoothly positions camera and optionally follows pawn.", r =>
             {
                 var map = Lookup.MapFrom(r);
                 if (Find.CurrentMap != map) Current.Game.CurrentMap = map;
-                if (r.HasArg("x") && r.HasArg("z")) Find.CameraDriver.JumpToCurrentMapLoc(Lookup.CellFrom(r, map));
-                if (r.HasArg("zoom")) Find.CameraDriver.SetRootPosAndSize(Find.CameraDriver.MapPosition.ToVector3Shifted(), Mathf.Clamp(r.ArgFloat("zoom", 24f), 8f, 80f));
+                float zoom = r.HasArg("zoom") ? Mathf.Clamp(r.ArgFloat("zoom", 24f), 8f, 80f) : Find.CameraDriver.RootSize;
+
+                if (r.HasArg("pawn"))
+                {
+                    var p = Lookup.PawnFrom(r, map);
+                    if (p != null)
+                    {
+                        FollowCamera.SetTarget(p, zoom);
+                        if (r.ArgBool("select", true))
+                        {
+                            Find.Selector.ClearSelection();
+                            Find.Selector.Select(p, playSound: false);
+                        }
+                        return Bridge.Ok("camera", Lookup.Cell(p.Position), "zoom", Math.Round(zoom, 1), "pawn", p.LabelShort, "following", true);
+                    }
+                }
+
+                if (r.HasArg("x") && r.HasArg("z"))
+                {
+                    var cell = Lookup.CellFrom(r, map);
+                    FollowCamera.Enabled = false;
+                    Find.CameraDriver.SetRootPosAndSize(cell.ToVector3Shifted(), zoom);
+                    Find.CameraDriver.JumpToCurrentMapLoc(cell);
+                    return Bridge.Ok("camera", Lookup.Cell(cell), "zoom", Math.Round(zoom, 1));
+                }
+
+                if (r.HasArg("zoom"))
+                {
+                    FollowCamera.DesiredZoom = zoom;
+                    Find.CameraDriver.SetRootPosAndSize(Find.CameraDriver.MapPosition.ToVector3Shifted(), zoom);
+                }
                 return Bridge.Ok("camera", Lookup.Cell(Find.CameraDriver.MapPosition), "zoom", Math.Round(Find.CameraDriver.RootSize, 1));
+            });
+
+            Doc(s, "ANY", "/camera/follow", "Configure smooth follow camera. {pawn, enabled:bool, deadzone:float, zoom:float, speed:float}", r =>
+            {
+                var map = Lookup.MapFrom(r);
+                if (r.HasArg("enabled")) FollowCamera.Enabled = r.ArgBool("enabled");
+                if (r.HasArg("deadzone")) FollowCamera.Deadzone = Mathf.Clamp(r.ArgFloat("deadzone", 3.2f), 0.5f, 15f);
+                if (r.HasArg("zoom")) FollowCamera.DesiredZoom = Mathf.Clamp(r.ArgFloat("zoom", 21f), 8f, 60f);
+                if (r.HasArg("speed")) FollowCamera.SmoothSpeed = Mathf.Clamp(r.ArgFloat("speed", 4.2f), 1f, 20f);
+                if (r.HasArg("pawn"))
+                {
+                    var p = Lookup.PawnFrom(r, map);
+                    if (p != null) FollowCamera.SetTarget(p, r.HasArg("zoom") ? (float?)FollowCamera.DesiredZoom : null);
+                }
+                return Bridge.Ok("enabled", FollowCamera.Enabled, "target", FollowCamera.Target?.LabelShort, "deadzone", FollowCamera.Deadzone, "zoom", FollowCamera.DesiredZoom, "speed", FollowCamera.SmoothSpeed);
+            });
+
+            Doc(s, "ANY", "/chat/push", "Push a live Twitch chat message to the in-game HUD overlay. {user, text, color}", r =>
+            {
+                string user = r.Arg("user");
+                string text = r.Arg("text");
+                string color = r.Arg("color");
+                if (string.IsNullOrEmpty(user) || string.IsNullOrEmpty(text)) throw new BridgeException("Must provide user and text.");
+                TwitchChatHUD.AddMessage(user, text, color);
+                return Bridge.Ok("pushed", true, "user", user, "text", text);
+            });
+
+            Doc(s, "ANY", "/chat/clear", "Clear in-game Twitch chat HUD messages.", r =>
+            {
+                lock (TwitchChatHUD.Messages) TwitchChatHUD.Messages.Clear();
+                return Bridge.Ok("cleared", true);
             });
 
             Doc(s, "ANY", "/select", "Select things in the UI (so a human watching sees what the AI is acting on). {things:[id]} or {pawn}", r =>

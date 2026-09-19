@@ -70,3 +70,17 @@ export async function updateTwitchChannelInfo({
     category: "RimWorld",
   };
 }
+
+/** Resolve the login name and user id that a user access token belongs to. */
+export async function resolveTwitchLogin({ clientId, token }) {
+  if (!clientId || !token) throw new Error("Missing Twitch Client ID or OAuth token.");
+  const cleanToken = token.replace(/^oauth:/i, "");
+  const res = await fetch("https://api.twitch.tv/helix/users", {
+    headers: { "Client-Id": clientId, Authorization: `Bearer ${cleanToken}` },
+  });
+  if (!res.ok) throw new Error(`Twitch user lookup failed: ${await res.text()}`);
+  const data = await res.json();
+  const u = data.data?.[0];
+  if (!u) throw new Error("Token does not resolve to a Twitch user.");
+  return { login: u.login, id: u.id, displayName: u.display_name };
+}

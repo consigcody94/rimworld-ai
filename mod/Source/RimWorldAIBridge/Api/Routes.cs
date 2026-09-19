@@ -59,6 +59,7 @@ namespace RimWorldAIBridge
             RegisterObserve(s);
             RegisterActions(s);
             RegisterGame(s);
+            RegisterTrade(s);
         }
 
         // ================================================================== OBSERVE

@@ -36,22 +36,51 @@ function loadEnv() {
 }
 
 const env = loadEnv();
+
+function saveEnv(updates) {
+  let content = fs.existsSync(ENV_FILE) ? fs.readFileSync(ENV_FILE, "utf-8") : "";
+  for (const [k, v] of Object.entries(updates)) {
+    if (v === undefined || v === null || v === "") continue;
+    const line = `${k}=${v}`;
+    const regex = new RegExp(`^${k}=.*$`, "m");
+    content = regex.test(content) ? content.replace(regex, line) : `${content.trim()}\n${line}`;
+  }
+  fs.writeFileSync(ENV_FILE, content.trim() + "\n", "utf-8");
+}
+
+let lastChannelInfo = null;
+/** Set the Twitch category to RimWorld and the stream title (needs client id + user token with channel:manage:broadcast). */
+async function applyChannelInfo(reason, title) {
+  const clientId = process.env.TWITCH_CLIENT_ID;
+  const token = process.env.TWITCH_BOT_OAUTH;
+  if (!clientId || !token) {
+    lastChannelInfo = { ok: false, error: "Twitch Client ID and OAuth token are required (open /auth/twitch)." };
+    return lastChannelInfo;
+  }
+  const result = await updateTwitchChannelInfo({ clientId, token, title: title || process.env.STREAM_TITLE || DEFAULT_STREAM_TITLE });
+  lastChannelInfo = { ...result, at: Date.now(), reason };
+  console.log(`[Twitch] channel updated (${reason}): category ${result.category}, title "${result.title}"`);
+  return lastChannelInfo;
+}
 const PORT = parseInt(process.env.STREAM_PORT || "18888", 10);
 const BRIDGE_URL = (process.env.RIMWORLD_API || "http://127.0.0.1:18800").replace(/\/$/, "");
 
 // App State
-let agentThoughts = [
-  "[Turn 5] Unallowed wild map drops; protected 121 home supplies.",
-  "[Agriculture] Sowed 24-cell Healroot patch for herbal medicine.",
-  "[Combat] Repelled manhunter attack with drafted volley; 100% tended.",
-];
+let agentThoughts = [];
 
 import { VoiceEngine } from "./voice.mjs";
+import { ChatBrain } from "./chat-brain.mjs";
+import { updateTwitchChannelInfo, resolveTwitchLogin, DEFAULT_STREAM_TITLE } from "./twitch-api.mjs";
 
 const voiceEngine = new VoiceEngine({
-  voiceName: env.VOICE_NAME || process.env.VOICE_NAME || "Daniel",
-  rate: 185,
+  voiceName: env.VOICE_NAME || process.env.VOICE_NAME || "com.apple.siri.natural.Nora",
+  rate: 0.38,
 });
+const chatBrain = new ChatBrain({ bridgeUrl: BRIDGE_URL });
+voiceEngine.warmup([
+  "Persona Core online. Welcome to the stream everyone.",
+  "Welcome in. I am an AI playing RimWorld live, no dev mode, every decision is mine.",
+]).catch(() => {});
 
 // Initialize Engines
 const chatEngine = new TwitchChatEngine({
@@ -60,6 +89,7 @@ const chatEngine = new TwitchChatEngine({
   oauthToken: env.TWITCH_BOT_OAUTH || process.env.TWITCH_BOT_OAUTH || "",
   bridgeUrl: BRIDGE_URL,
   voiceEngine,
+  chatBrain,
 });
 
 const streamEngine = new StreamEngine({
@@ -155,10 +185,10 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 200, {
           ok: false,
           error: "Bridge unreachable",
-          colonyName: "NewDawn",
-          date: "Day 11, Spring",
-          weather: "Clear",
-          temperatureC: 11,
+          colonyName: "",
+          date: "",
+          weather: "",
+          temperatureC: null,
           colonists: [],
         });
       }
@@ -175,6 +205,8 @@ const server = http.createServer(async (req, res) => {
         chat: chatEngine.chatHistory,
         poll: chatEngine.getPollSummary(),
         thoughts: agentThoughts,
+        voice: { ...voiceEngine.state, stats: voiceEngine.stats },
+        brain: { mode: chatBrain.mode, llmAvailable: chatBrain.available, stats: chatBrain.stats },
       });
     }
 
@@ -195,10 +227,11 @@ const server = http.createServer(async (req, res) => {
     // ------------------------------------------------------------------------
     if (pathname === "/api/voice/speak" && req.method === "POST") {
       const body = await parseJsonBody(req);
+      let accepted = false;
       if (body.text) {
-        voiceEngine.speak(body.text);
+        accepted = voiceEngine.speak(body.text, { force: Boolean(body.force), priority: body.priority });
       }
-      return sendJson(res, 200, { ok: true, spoken: body.text });
+      return sendJson(res, 200, { ok: true, accepted, text: body.text, state: voiceEngine.state });
     }
 
     // ------------------------------------------------------------------------
@@ -223,6 +256,7 @@ const server = http.createServer(async (req, res) => {
     // ------------------------------------------------------------------------
     if (pathname === "/api/stream/start" && req.method === "POST") {
       const result = streamEngine.start();
+      applyChannelInfo("stream start").catch((e) => console.warn("[Twitch] channel update failed:", e.message));
       return sendJson(res, 200, result);
     }
 
@@ -232,7 +266,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === "/api/stream/status" && req.method === "GET") {
-      return sendJson(res, 200, streamEngine.stats);
+      return sendJson(res, 200, { ...streamEngine.stats, channelInfo: lastChannelInfo });
     }
 
     // ------------------------------------------------------------------------
@@ -244,6 +278,9 @@ const server = http.createServer(async (req, res) => {
         channel: chatEngine.channel,
         hasKey: Boolean(streamEngine.streamKey),
         hasOauth: Boolean(chatEngine.oauthToken),
+        hasClientId: Boolean(process.env.TWITCH_CLIENT_ID),
+        botUsername: chatEngine.botUsername || null,
+        channelInfo: lastChannelInfo,
       });
     }
 
@@ -292,7 +329,7 @@ const server = http.createServer(async (req, res) => {
       const redirectUri = `http://localhost:${PORT}/auth/callback`;
 
       if (clientId) {
-        const oauthUrl = `https://id.twitch.tv/oauth2/authorize?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=token&scope=chat:read+chat:edit`;
+        const oauthUrl = `https://id.twitch.tv/oauth2/authorize?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=token&scope=chat:read+chat:edit+channel:manage:broadcast`;
         res.writeHead(302, { Location: oauthUrl });
         res.end();
         return;
@@ -306,13 +343,14 @@ const server = http.createServer(async (req, res) => {
         <head><title>Twitch Authorization</title><style>body{font-family:sans-serif;background:#0d1117;color:#c9d1d9;padding:40px;max-width:600px;margin:auto;}a{color:#58a6ff;}input{width:100%;padding:10px;margin:10px 0;background:#161b22;border:1px solid #30363d;color:#fff;border-radius:6px;box-sizing:border-box;}button{background:#9146ff;color:#fff;border:none;padding:10px 20px;border-radius:6px;cursor:pointer;font-weight:bold;}</style></head>
         <body>
           <h2>Twitch Bot Authorization</h2>
-          <p>Generate a chat token using the standard Twitch Token Generator:</p>
-          <p><a href="https://twitchapps.com/tmi/" target="_blank">👉 Open twitchapps.com/tmi to generate token</a></p>
+          <p>Generate a token with <a href="https://twitchtokengenerator.com/" target="_blank">twitchtokengenerator.com</a>: choose <b>Custom Scope Token</b>, tick <code>chat:read</code>, <code>chat:edit</code> and <code>channel:manage:broadcast</code>, authorize with the account that streams, then paste the <b>Client ID</b> and <b>Access Token</b> below. The bot username is resolved from the token automatically.</p>
           <form method="POST" action="/auth/save-token">
-            <label>Bot Username:</label>
-            <input type="text" name="botUsername" placeholder="e.g. MyBot" required>
-            <label>OAuth Token:</label>
-            <input type="password" name="oauthToken" placeholder="oauth:..." required>
+            <label>Client ID:</label>
+            <input type="text" name="clientId" placeholder="Client ID from the generator" required>
+            <label>Access Token:</label>
+            <input type="password" name="oauthToken" placeholder="access token (with or without oauth: prefix)" required>
+            <label>Bot Username (optional, resolved from the token when blank):</label>
+            <input type="text" name="botUsername" placeholder="leave blank">
             <button type="submit">Save Token &amp; Connect</button>
           </form>
           <p><a href="/">← Return to Studio</a></p>
@@ -325,33 +363,44 @@ const server = http.createServer(async (req, res) => {
     if (pathname === "/auth/save-token" && req.method === "POST") {
       let body = "";
       req.on("data", (c) => (body += c));
-      req.on("end", () => {
+      req.on("end", async () => {
         const params = new URLSearchParams(body);
-        const botUsername = params.get("botUsername")?.trim();
-        const oauthToken = params.get("oauthToken")?.trim();
+        let botUsername = params.get("botUsername")?.trim();
+        let oauthToken = params.get("oauthToken")?.trim();
+        const clientId = params.get("clientId")?.trim() || process.env.TWITCH_CLIENT_ID;
+        if (oauthToken && !/^oauth:/i.test(oauthToken)) oauthToken = `oauth:${oauthToken}`;
 
-        if (botUsername && oauthToken) {
-          process.env.TWITCH_BOT_USERNAME = botUsername;
-          process.env.TWITCH_BOT_OAUTH = oauthToken;
-          chatEngine.botUsername = botUsername;
-          chatEngine.oauthToken = oauthToken;
-          chatEngine.connect();
-
-          let envContent = fs.existsSync(ENV_FILE) ? fs.readFileSync(ENV_FILE, "utf-8") : "";
-          const updates = [`TWITCH_BOT_USERNAME=${botUsername}`, `TWITCH_BOT_OAUTH=${oauthToken}`];
-          for (const u of updates) {
-            const k = u.split("=")[0];
-            const regex = new RegExp(`^${k}=.*$`, "m");
-            if (regex.test(envContent)) envContent = envContent.replace(regex, u);
-            else envContent += `\n${u}`;
+        if (oauthToken) {
+          if (!botUsername && clientId) {
+            try { botUsername = (await resolveTwitchLogin({ clientId, token: oauthToken })).login; }
+            catch (e) { console.warn("[Twitch] could not resolve login from token:", e.message); }
           }
-          fs.writeFileSync(ENV_FILE, envContent.trim() + "\n", "utf-8");
+          if (clientId) process.env.TWITCH_CLIENT_ID = clientId;
+          process.env.TWITCH_BOT_OAUTH = oauthToken;
+          chatEngine.oauthToken = oauthToken;
+          if (botUsername) {
+            process.env.TWITCH_BOT_USERNAME = botUsername;
+            chatEngine.botUsername = botUsername;
+          }
+          chatEngine.connect();
+          saveEnv({ TWITCH_CLIENT_ID: clientId, TWITCH_BOT_USERNAME: botUsername, TWITCH_BOT_OAUTH: oauthToken });
+          applyChannelInfo("token saved").catch(() => {});
         }
 
         res.writeHead(302, { Location: "/" });
         res.end();
       });
       return;
+    }
+
+    if (pathname === "/api/twitch/channel" && req.method === "POST") {
+      const body = await parseJsonBody(req);
+      try {
+        const result = await applyChannelInfo("manual", body.title);
+        return sendJson(res, 200, result);
+      } catch (e) {
+        return sendJson(res, 400, { ok: false, error: e.message });
+      }
     }
 
     if (pathname === "/auth/callback") {

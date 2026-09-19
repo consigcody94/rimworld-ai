@@ -10,7 +10,7 @@ async function updateTelemetry() {
     const snap = await res.json();
 
     // Top Header
-    document.getElementById("colony-name").textContent = snap.colonyName || "NewDawn";
+    document.getElementById("colony-name").textContent = snap.colonyName || "Persona Core";
     document.getElementById("game-date").textContent = snap.date || "Spring 5500";
     document.getElementById("game-weather").textContent = `${Math.round(snap.temperatureC || 10)}C ${snap.weather || "Clear"}`;
     document.getElementById("storyteller").textContent = snap.storyteller || "Cassandra Classic";

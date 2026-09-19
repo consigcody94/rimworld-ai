@@ -37,11 +37,11 @@ namespace RimWorldAIBridge
                 return Bridge.Ok("loading", name);
             });
 
-            Doc(s, "ANY", "/game/new", "Start a new game without the UI. {scenario:Crashlanded, storyteller:Cassandra, difficulty:Rough, mapSize:250, seed:'abc', planetCoverage:0.3, colonyName}. Takes ~1-2 min; poll /status.", r =>
+            Doc(s, "ANY", "/game/new", "Start a new game without the UI. {scenario:NakedBrutality, storyteller:Cassandra, difficulty:Rough, mapSize:250, seed:'abc', planetCoverage:0.3, biome:TemperateForest, hilliness:LargeHills, permadeath:true, neolithic:true, curatePawn:true, colonyName}. Takes ~1-2 min; poll /status.", r =>
             {
                 if (Current.ProgramState == ProgramState.Playing) throw new BridgeException("A game is running. POST /game/menu first (or /game/save then /game/menu).", 409);
                 if (LongEventHandler.AnyEventNowOrWaiting) throw new BridgeException("Game is busy loading; wait and retry.", 409);
-                var scen = Lookup.Def<ScenarioDef>(r.Arg("scenario") ?? "Crashlanded", "ScenarioDef");
+                var scen = Lookup.Def<ScenarioDef>(r.Arg("scenario") ?? "NakedBrutality", "ScenarioDef");
                 var story = Lookup.Def<StorytellerDef>(r.Arg("storyteller") ?? "Cassandra", "StorytellerDef");
                 var diff = Lookup.Def<DifficultyDef>(r.Arg("difficulty") ?? "Rough", "DifficultyDef");
                 int mapSize = Mathf.Clamp(r.ArgInt("mapSize", 250), 75, 400);
@@ -49,6 +49,12 @@ namespace RimWorldAIBridge
                 string seed = r.Arg("seed");
                 if (string.IsNullOrEmpty(seed)) seed = GenText.RandomSeedString();
                 string colonyName = r.Arg("colonyName");
+                string biomeArg = r.Arg("biome") ?? "TemperateForest";
+                string hillArg = r.Arg("hilliness") ?? "LargeHills";
+                bool permadeath = r.ArgBool("permadeath", false);
+                bool neolithic = r.ArgBool("neolithic", false);
+                bool curatePawn = r.ArgBool("curatePawn", true);
+
                 LongEventHandler.QueueLongEvent(() =>
                 {
                     Current.ProgramState = ProgramState.Entry;
@@ -59,14 +65,95 @@ namespace RimWorldAIBridge
                     Find.Scenario.PreConfigure();
                     Current.Game.storyteller = new Storyteller(story, diff);
                     Current.Game.World = WorldGenerator.GenerateWorld(coverage, seed, OverallRainfall.Normal, OverallTemperature.Normal, OverallPopulation.Normal, LandmarkDensity.Normal);
-                    Find.GameInitData.ChooseRandomStartingTile();
+
+                    // 1. Smart tile selection based on requested biome, hilliness, rock types, and growing period
+                    int bestTile = -1;
+                    int bestScore = -1;
+                    var targetBiome = DefDatabase<BiomeDef>.GetNamedSilentFail(biomeArg) ?? BiomeDefOf.TemperateForest;
+                    var targetHill = Hilliness.LargeHills;
+                    Enum.TryParse<Hilliness>(hillArg, true, out targetHill);
+
+                    for (int t = 0; t < Find.WorldGrid.TilesCount; t++)
+                    {
+                        var tile = Find.WorldGrid[t];
+                        if (tile.WaterCovered || !tile.OnSurface || tile.PrimaryBiome != targetBiome) continue;
+                        if (tile.hilliness != targetHill) continue;
+
+                        int score = 100;
+                        var rocks = Find.World.NaturalRockTypesIn(t);
+                        if (rocks != null)
+                        {
+                            if (rocks.Any(k => k.defName == "Granite")) score += 30;
+                            if (rocks.Any(k => k.defName == "Marble")) score += 30;
+                        }
+
+                        // Temperate forest with mild temperature (12C - 24C) guarantees 40-60 day growing period
+                        if (tile.temperature < 8f || tile.temperature > 26f) continue;
+                        score += (int)(tile.temperature * 5f);
+                        if (tile.rainfall >= 800f) score += 20;
+
+                        if (score > bestScore)
+                        {
+                            bestScore = score;
+                            bestTile = t;
+                        }
+                    }
+
+                    if (bestTile >= 0) Find.GameInitData.startingTile = bestTile;
+                    else Find.GameInitData.ChooseRandomStartingTile();
+
                     Find.GameInitData.mapSize = mapSize;
+
+                    if (permadeath)
+                    {
+                        Find.GameInitData.permadeath = true;
+                        Find.GameInitData.permadeathChosen = true;
+                    }
+
                     Find.Scenario.PostIdeoChosen();
                     Find.GameInitData.PrepForMapGen();
+
+                    // 2. Curate the founder: score hundreds of rolls and keep a top-decile pawn
+                    //    (skills, passions, traits, health, age). Nothing is edited on the pawn itself,
+                    //    so the start stays a legitimate random roll, just a well chosen one.
+                    if (curatePawn && Find.GameInitData.startingAndOptionalPawns != null && Find.GameInitData.startingAndOptionalPawns.Count > 0)
+                    {
+                        float best = float.MinValue;
+                        const int calibration = 150, maxRolls = 800;
+                        int rolls = 0;
+                        for (; rolls < maxRolls; rolls++)
+                        {
+                            var p = Find.GameInitData.startingAndOptionalPawns[0];
+                            float score = FounderScore(p);
+                            if (score > best) best = score;
+                            if (rolls >= calibration && score > 0f && score >= best * 0.92f) break;
+                            StartingPawnUtility.RandomizePawn(0);
+                        }
+                        var chosen = Find.GameInitData.startingAndOptionalPawns[0];
+                        LastFounderScore = FounderScore(chosen);
+                        LastFounderRolls = rolls;
+                        Log.Message("[RimWorldAIBridge] founder curated after " + rolls + " rolls, score " + LastFounderScore.ToString("F0") + ": " + chosen?.LabelShort);
+                    }
+
                     Find.Scenario.PreMapGenerate();
                 }, "Play", "GeneratingMap", true, GameAndMapInitExceptionHandlers.ErrorWhileGeneratingMap);
+
                 if (!string.IsNullOrEmpty(colonyName)) PendingColonyName = colonyName;
-                return Bridge.Ok("starting", true, "scenario", scen.defName, "storyteller", story.defName, "difficulty", diff.defName, "mapSize", mapSize, "seed", seed);
+                if (neolithic) PendingNeolithicTech = true;
+
+                return Bridge.Ok(
+                    "starting", true,
+                    "scenario", scen.defName,
+                    "storyteller", story.defName,
+                    "difficulty", diff.defName,
+                    "biome", biomeArg,
+                    "hilliness", hillArg,
+                    "permadeath", permadeath,
+                    "neolithic", neolithic,
+                    "mapSize", mapSize,
+                    "seed", seed,
+                    "curatePawn", curatePawn
+                );
             });
 
             Doc(s, "ANY", "/game/menu", "Quit to the main menu (does not save).", r =>
@@ -98,5 +185,76 @@ namespace RimWorldAIBridge
         }
 
         public static string PendingColonyName;
+        public static bool PendingNeolithicTech;
+        public static float LastFounderScore;
+        public static int LastFounderRolls;
+
+        /// <summary>Fitness of a pawn as a Naked Brutality founder. Negative means disqualified.</summary>
+        public static float FounderScore(Pawn p)
+        {
+            if (p == null || p.skills == null || p.health?.capacities == null) return -1f;
+            if (p.CombinedDisabledWorkTags != WorkTags.None) return -1f;
+            int age = p.ageTracker?.AgeBiologicalYears ?? 99;
+            if (age < 18 || age > 45) return -1f;
+            if (p.health.capacities.GetLevel(PawnCapacityDefOf.Sight) < 0.99f) return -1f;
+            if (p.health.capacities.GetLevel(PawnCapacityDefOf.Moving) < 0.99f) return -1f;
+            if (p.health.capacities.GetLevel(PawnCapacityDefOf.Manipulation) < 0.99f) return -1f;
+            if (p.health.hediffSet?.hediffs != null)
+            {
+                foreach (var h in p.health.hediffSet.hediffs)
+                {
+                    if (h.def.isBad || h.def.chronic || h is Hediff_MissingPart || h is Hediff_Injury || h is Hediff_Addiction) return -1f;
+                    if (h.def.defName.IndexOf("Pregnant", StringComparison.OrdinalIgnoreCase) >= 0) return -1f;
+                }
+            }
+
+            float s = 0f;
+            Func<SkillDef, float, float> sk = (def, w) =>
+            {
+                var r = p.skills.GetSkill(def);
+                if (r == null || r.TotallyDisabled) return -50f;
+                float passion = r.passion == Passion.Major ? 6f : r.passion == Passion.Minor ? 3f : 0f;
+                return r.Level * w + passion * (w >= 2f ? 1f : 0.5f);
+            };
+            s += sk(SkillDefOf.Plants, 3f);
+            s += sk(SkillDefOf.Construction, 2f);
+            s += sk(SkillDefOf.Medicine, 2f);
+            s += Mathf.Max(sk(SkillDefOf.Shooting, 2f), sk(SkillDefOf.Melee, 2f));
+            s += sk(SkillDefOf.Cooking, 1f);
+            s += sk(SkillDefOf.Crafting, 1f);
+            s += sk(SkillDefOf.Intellectual, 1f);
+            s += sk(SkillDefOf.Mining, 0.5f);
+            if ((p.skills.GetSkill(SkillDefOf.Plants)?.Level ?? 0) < 5) s -= 25f;
+            if (age >= 20 && age <= 35) s += 5f;
+
+            if (p.story?.traits != null)
+            {
+                foreach (var t in p.story.traits.allTraits)
+                {
+                    string n = t.def.defName; int d = t.Degree;
+                    switch (n)
+                    {
+                        case "Tough": s += 14f; break;
+                        case "FastLearner": s += 10f; break;
+                        case "Nudist": s += 8f; break;
+                        case "Ascetic": s += 6f; break;
+                        case "QuickSleeper": s += 5f; break;
+                        case "TooSmart": s += 4f; break;
+                        case "Kind": s += 2f; break;
+                        case "Industriousness": s += d == 2 ? 12f : d == 1 ? 7f : d == -1 ? -30f : -60f; break;
+                        case "Nerves": s += d == 2 ? 10f : d == 1 ? 6f : d == -1 ? -12f : -40f; break;
+                        case "NaturalMood": s += d == 2 ? 10f : d == 1 ? 6f : d == -1 ? -20f : -60f; break;
+                        case "SpeedOffset": s += d >= 1 ? 8f : -30f; break;
+                        case "Immunity": s += d >= 1 ? 8f : -30f; break;
+                        case "DrugDesire": s += d == 2 ? -60f : d == 1 ? -15f : 4f; break;
+                        case "Neurotic": s += d == 2 ? 4f : 2f; break;
+                        case "Pyromaniac": case "Wimp": case "Gourmand": case "Slowpoke": case "Lazy": case "Slothful": s -= 60f; break;
+                        case "Undergrounder": s -= 5f; break;
+                        case "NightOwl": case "Abrasive": case "Greedy": case "Jealous": case "Psychopath": case "Bloodlust": s -= 3f; break;
+                    }
+                }
+            }
+            return s;
+        }
     }
 }

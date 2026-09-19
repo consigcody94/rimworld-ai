@@ -11,6 +11,7 @@ export class TwitchChatEngine {
     this.oauthToken = options.oauthToken ?? "";
     this.bridgeUrl = (options.bridgeUrl ?? "http://127.0.0.1:18800").replace(/\/$/, "");
     this.voiceEngine = options.voiceEngine ?? null;
+    this.chatBrain = options.chatBrain ?? null;
     this.ws = null;
     this.connected = false;
     this.isAuthenticated = false;
@@ -146,18 +147,36 @@ export class TwitchChatEngine {
 
     this.broadcastEvent({ type: "chat", ...chatMsg });
 
-    // Display viewer chat directly inside RimWorld UI
+    // Display viewer chat directly inside RimWorld in-game HUD
+    try {
+      await this.callBridge("POST", "/chat/push", { user: username, text: message });
+    } catch {}
     try {
       await this.callBridge("POST", "/notify", { text: `[Twitch] ${username}: ${message.slice(0, 75)}`, type: "neutral" });
     } catch {}
 
     if (message.startsWith("!")) {
       await this.handleCommand(username, message);
-    } else if (this.voiceEngine) {
-      const response = this.voiceEngine.formatPersonaResponse(username, message);
-      this.sendChat(response);
-      this.voiceEngine.speak(response);
+    } else {
+      await this.respondConversationally(username, message, false);
     }
+  }
+
+  async respondConversationally(username, message, force) {
+    if (!this.chatBrain) return;
+    let response = null;
+    try {
+      response = await this.chatBrain.reply(username, message, { force });
+    } catch (e) {
+      console.warn("[TwitchChat] reply failed:", e.message);
+    }
+    if (!response) return;
+    this.sendChat(response);
+    this.chatHistory.push({ username: "PersonaCore", message: response, timestamp: new Date().toLocaleTimeString() });
+    if (this.chatHistory.length > 50) this.chatHistory.shift();
+    this.broadcastEvent({ type: "reply", username: "PersonaCore", message: response, timestamp: new Date().toLocaleTimeString() });
+    try { await this.callBridge("POST", "/chat/push", { user: "PersonaCore", text: response.slice(0, 140), color: "#7DD3FC" }); } catch {}
+    if (this.voiceEngine) this.voiceEngine.speak(response, { force: true });
   }
 
   async handleCommand(username, message) {
@@ -169,8 +188,17 @@ export class TwitchChatEngine {
       switch (cmd) {
         case "help":
         case "commands": {
-          const text = `Available commands: !status, !colonists, !pawn <name>, !research, !resources, !say <message>, !vote <tech>, !poll`;
+          const text = `Available commands: !ask <question>, !status, !colonists, !pawn <name>, !research, !resources, !say <message>, !vote <tech>, !poll`;
           this.sendChat(text);
+          break;
+        }
+
+        case "ask": {
+          if (!args) {
+            this.sendChat(`Usage: !ask <question for the AI>`);
+            return;
+          }
+          await this.respondConversationally(username, args, true);
           break;
         }
 
@@ -192,7 +220,7 @@ export class TwitchChatEngine {
 
         case "pawn": {
           if (!args) {
-            this.sendChat(`Usage: !pawn <name> (e.g. !pawn Jenni, !pawn Callie, !pawn Roro)`);
+            this.sendChat(`Usage: !pawn <name>`);
             return;
           }
           let p = null;
@@ -206,7 +234,8 @@ export class TwitchChatEngine {
             );
           }
           if (!p) {
-            this.sendChat(`Colonist "${args}" not found. Active colonists: Jenni, Callie, Roro`);
+            const names = (pawnsRes.pawns ?? []).map((x) => x.name).join(", ");
+            this.sendChat(`Colonist "${args}" not found. Active colonists: ${names || "none"}`);
             return;
           }
           const skills = Object.entries(p.skills ?? {})
