@@ -7,9 +7,11 @@
 - [done] 4. Update MCP client and documentation (README, guide, smoke tests)
 - [done] 5. Start a clean no-Dev-Mode colony benchmark and verify save/load recovery
 - [done] 6. Execute autonomous colony management run (priorities, beds, food, research, orders)
+- [done] 7. Implement Allow Tool suite (/allow, /forbid, rimworld_allow) supporting map, home, rect, and def filters
+- [done] 8. Integrate RimOp optimization spreadsheet heuristics into colony-agent.mjs and establish Healroot cultivation
 
 ## Now
-Colony NewDawn thriving on Day 11. Batteries research at 81%, shelter fully roofed and heated, barricades placed, all colonists healthy with high mood.
+Colony NewDawn thriving on Day 11. Batteries research at 81%, 24-cell Healroot patch established, Allow Tool keeping wild supplies safe, all colonists sleeping comfortably in warm shelter.
 
 ## Log
 - 2026-09-19T01:18:00Z Root cause identified: Prefs.xml runInBackground was False, causing Unity Update loop to halt whenever RimWorld lost window focus.
@@ -23,12 +25,16 @@ Colony NewDawn thriving on Day 11. Batteries research at 81%, shelter fully roof
 - 2026-09-19T01:41:00Z Implemented autonomous playing script scripts/colony-agent.mjs incorporating JKV Optimization Guide rules.
 - 2026-09-19T01:44:00Z Neutralized manhunter hare attack without colonist loss using drafted rifle volley; treated and bandaged all wounds with medicine.
 - 2026-09-19T01:47:00Z Reached Day 11 with 81% Batteries progress, high colonist mood (57% to 69%), and clean daily save NewDawn_Day11.
+- 2026-09-19T01:53:00Z Implemented Allow Tool in ActionRoutes.cs with /allow and /forbid endpoints; updated MCP server with rimworld_allow and rimworld_forbid.
+- 2026-09-19T01:54:00Z Parsed RimOp.xlsx spreadsheet; applied herbal medicine (Healroot) cultivation priority and specialized work priorities.
+- 2026-09-19T01:56:00Z Verified 5-turn autonomous agent loop with wild supply hygiene; committed and pushed to GitHub.
 
 ## STATUS: READY
 Delivered:
 - Command-driven AI Bridge mod compiled and active at localhost:18800.
-- Fully working Model Context Protocol (MCP) server with 64 tools covering observation, control, time pacing, zoning, and persistence.
-- Autonomous playing script (scripts/colony-agent.mjs) implementing turn-based colony management and optimization heuristics.
+- Fully working Model Context Protocol (MCP) server with 65 tools covering observation, control, time pacing, zoning, allow tool, and persistence.
+- Allow Tool feature suite: /allow and /forbid endpoints supporting all, home, rect, cells, things, and defName filters.
+- Autonomous playing script (scripts/colony-agent.mjs) implementing turn-based colony management, RimOp optimization guide heuristics, and supply hygiene.
 - Non-cheated (devMode=false, godMode=false) colony NewDawn running stably on Day 11 with full shelter, food security, research progress, defensive cover, and medical recovery.
 Remaining:
 - Continue scaling research tree (SolarPanels, Gunsmithing) and expand into stone block masonry and electricity grid.
