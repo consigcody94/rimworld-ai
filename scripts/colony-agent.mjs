@@ -73,6 +73,7 @@ async function reportThought(text) {
 const TECH_TREE_ORDER = [
   "Batteries",
   "SolarPanels",
+  "Smithing",
   "Gunsmithing",
   "BlowbackOperation",
   "GasOperation",
@@ -215,6 +216,9 @@ export class ColonyAgent {
     }
 
     // 6. Dismiss expired dialogs or info letters
+    try {
+      await api.post("/dialog/close", { all: true });
+    } catch {}
     if (snap.letters && snap.letters.length > 2) {
       await api.post("/letter/dismiss", { all: true });
     }
@@ -224,7 +228,12 @@ export class ColonyAgent {
       await this.advanceResearch(research?.project);
     }
 
-    // 8. Daily Autosave
+    // 8. Power Infrastructure Management
+    if (this.turnCount % 10 === 2) {
+      await this.managePowerGrid();
+    }
+
+    // 9. Daily Autosave
     if (this.saveDaily && curDay !== null && curDay !== this.lastSavedDay) {
       const saveName = `NewDawn_Day${curDay}`;
       console.log(`[AUTOSAVE] Day ${curDay} reached. Saving as ${saveName}...`);
@@ -233,6 +242,7 @@ export class ColonyAgent {
         this.lastSavedDay = curDay;
         await reportThought(`[Autosave] Day ${curDay} saved as ${saveName}.`);
         await this.waitForReady();
+        await api.post("/dialog/close", { all: true });
       } catch (err) {
         console.error(`[AUTOSAVE FAILED] ${err.message}`);
       }
@@ -373,20 +383,66 @@ export class ColonyAgent {
   }
 
   async advanceResearch(currentProject) {
-    let nextTech = null;
-    for (const tech of TECH_TREE_ORDER) {
-      if (tech === currentProject) continue;
-      nextTech = tech;
-      break;
-    }
-    if (nextTech) {
-      try {
+    try {
+      const resData = await api.get("/research");
+      const availableDefs = (resData.available ?? []).map((a) => a.def);
+      let nextTech = null;
+      for (const tech of TECH_TREE_ORDER) {
+        if (availableDefs.includes(tech)) {
+          nextTech = tech;
+          break;
+        }
+      }
+      if (nextTech && nextTech !== currentProject) {
         await api.post("/research", { project: nextTech });
         console.log(`[RESEARCH] Set active research project to ${nextTech}.`);
         await reportThought(`[Research] Activated new research project: ${nextTech}.`);
-      } catch (e) {
-        console.warn(`[RESEARCH WARN] Could not set project ${nextTech}: ${e.message}`);
       }
+    } catch (e) {
+      console.warn(`[RESEARCH WARN] Could not advance research: ${e.message}`);
+    }
+  }
+
+  async managePowerGrid() {
+    try {
+      const buildings = await api.get("/things/summary?cat=Building&player=1");
+      const builtDefs = new Set((buildings.groups ?? []).map((g) => g.def));
+
+      // 1. Build WoodFiredGenerator if none exists
+      if (!builtDefs.has("WoodFiredGenerator")) {
+        try {
+          await api.post("/build", { def: "WoodFiredGenerator", x: 96, z: 112 });
+          console.log("[POWER] Designated Wood-Fired Generator at (96, 112).");
+          await reportThought("[Power] Designated Wood-Fired Generator (96, 112).");
+        } catch {}
+      }
+
+      // 2. Build Battery inside roofed shelter once Batteries research completes
+      const batteryDefs = await api.get("/defs?type=building&q=Battery&buildable=1");
+      const canBuildBattery = (batteryDefs.defs ?? []).some((d) => d.def === "Battery" && d.researched);
+      if (canBuildBattery && !builtDefs.has("Battery")) {
+        try {
+          await api.post("/build", { def: "Battery", x: 91, z: 112 });
+          console.log("[POWER] Designated Battery inside sheltered bedroom at (91, 112).");
+          await reportThought("[Power] Designated Battery inside shelter at (91, 112).");
+        } catch {}
+      }
+
+      // 3. Connect power conduits
+      if (!builtDefs.has("PowerConduit")) {
+        const conduitCells = [
+          { def: "PowerConduit", x: 91, z: 112 },
+          { def: "PowerConduit", x: 92, z: 112 },
+          { def: "PowerConduit", x: 93, z: 112 },
+          { def: "PowerConduit", x: 94, z: 112 },
+          { def: "PowerConduit", x: 95, z: 112 },
+        ];
+        try {
+          await api.post("/build/bulk", { items: conduitCells });
+        } catch {}
+      }
+    } catch (err) {
+      console.warn(`[POWER WARN] Could not manage power grid: ${err.message}`);
     }
   }
 

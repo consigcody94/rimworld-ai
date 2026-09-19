@@ -185,7 +185,20 @@ export class TwitchChatEngine {
             this.sendChat(`Usage: !pawn <name> (e.g. !pawn Jenni, !pawn Callie, !pawn Roro)`);
             return;
           }
-          const p = await this.callBridge("GET", `/pawn/${encodeURIComponent(args)}`);
+          let p = null;
+          try {
+            p = await this.callBridge("GET", `/pawn/${encodeURIComponent(args)}`);
+          } catch {}
+          if (!p || p.ok === false || !p.name) {
+            const pawnsRes = await this.callBridge("GET", "/pawns?detail=true");
+            p = (pawnsRes.pawns ?? []).find(
+              (x) => x.name?.toLowerCase() === args.toLowerCase() || String(x.id) === args
+            );
+          }
+          if (!p) {
+            this.sendChat(`Colonist "${args}" not found. Active colonists: Jenni, Callie, Roro`);
+            return;
+          }
           const skills = Object.entries(p.skills ?? {})
             .map(([k, v]) => `${k}: ${v}`)
             .slice(0, 5)
@@ -197,18 +210,19 @@ export class TwitchChatEngine {
         case "research": {
           const res = await this.callBridge("GET", "/research");
           const cur = res.current ? `${res.current.label} (${Math.round(res.current.progress * 100)}%)` : "None";
-          const available = (res.available ?? []).slice(0, 5).join(", ");
+          const available = (res.available ?? []).slice(0, 5).map((a) => a.label ?? a.def).join(", ");
           this.sendChat(`[Research] Active: ${cur} | Available options: ${available}`);
           break;
         }
 
         case "resources": {
           const r = await this.callBridge("GET", "/resources");
-          const text = Object.entries(r)
-            .filter(([k]) => k !== "ok")
+          const resObj = r.resources ?? {};
+          const text = Object.entries(resObj)
             .map(([k, v]) => `${k}: ${v}`)
             .join(", ");
-          this.sendChat(`[Stockpiled Resources] ${text}`);
+          const foodText = r.foodNutrition ? ` | Edible Food: ${r.foodNutrition}` : "";
+          this.sendChat(`[Stockpiled Resources] ${text}${foodText}`);
           break;
         }
 
