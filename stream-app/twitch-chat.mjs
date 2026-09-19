@@ -10,6 +10,7 @@ export class TwitchChatEngine {
     this.botUsername = options.botUsername ?? "";
     this.oauthToken = options.oauthToken ?? "";
     this.bridgeUrl = (options.bridgeUrl ?? "http://127.0.0.1:18800").replace(/\/$/, "");
+    this.voiceEngine = options.voiceEngine ?? null;
     this.ws = null;
     this.connected = false;
     this.isAuthenticated = false;
@@ -145,8 +146,17 @@ export class TwitchChatEngine {
 
     this.broadcastEvent({ type: "chat", ...chatMsg });
 
+    // Display viewer chat directly inside RimWorld UI
+    try {
+      await this.callBridge("POST", "/notify", { text: `[Twitch] ${username}: ${message.slice(0, 75)}`, type: "neutral" });
+    } catch {}
+
     if (message.startsWith("!")) {
       await this.handleCommand(username, message);
+    } else if (this.voiceEngine) {
+      const response = this.voiceEngine.formatPersonaResponse(username, message);
+      this.sendChat(response);
+      this.voiceEngine.speak(response);
     }
   }
 
@@ -235,6 +245,9 @@ export class TwitchChatEngine {
           await this.callBridge("POST", "/notify", { text: displayMsg, type: "neutral" });
           this.broadcastEvent({ type: "notification", from: username, text: args });
           this.sendChat(`@${username} Your message has appeared on the RimWorld game screen!`);
+          if (this.voiceEngine) {
+            this.voiceEngine.speak(`${username} says: ${args}`);
+          }
           break;
         }
 

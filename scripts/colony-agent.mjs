@@ -66,6 +66,17 @@ async function reportThought(text) {
   } catch {}
 }
 
+async function reportVoice(text) {
+  try {
+    await fetch("http://localhost:18888/api/voice/speak", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+      signal: AbortSignal.timeout(1000),
+    });
+  } catch {}
+}
+
 // ============================================================================
 // Research Progression Plan (from RimOp optimization guide)
 // ============================================================================
@@ -248,7 +259,10 @@ export class ColonyAgent {
       }
     }
 
-    // 9. Status Log
+    // 10. Intelligent Camera Director (stream engagement)
+    await this.manageCamera(snap);
+
+    // 11. Status Log
     this.printStatus(snap, curDay);
 
     // Fast asynchronous pacing: sleep for peacetime stepMs
@@ -408,6 +422,41 @@ export class ColonyAgent {
     }
   }
 
+  async manageCamera(snap) {
+    try {
+      const colonists = snap.colonists ?? [];
+      const hostiles = (snap.hostiles ?? []).filter((h) => !h.downed && !h.dead);
+
+      if (hostiles.length > 0) {
+        const target = hostiles[0];
+        await api.post("/camera", { x: target.x ?? 88, z: target.z ?? 109, zoom: 22 });
+        await api.post("/select", { pawn: target.id });
+        return;
+      }
+
+      // Follow active working colonist (e.g. constructing, chopping, tending)
+      const activePawn = colonists.find((c) => c.doing && !c.doing.includes("sleeping") && !c.doing.includes("standing") && !c.doing.includes("resting"));
+      if (activePawn && this.turnCount % 3 === 0) {
+        await api.post("/camera", { x: activePawn.x, z: activePawn.z, zoom: 20 });
+        await api.post("/select", { pawn: activePawn.id });
+        return;
+      }
+
+      // Smooth cinematic showcase cycling for stream audience
+      if (this.turnCount % 12 === 0) {
+        const showcaseSpots = [
+          { x: 88, z: 109, zoom: 24, label: "Base Core" },
+          { x: 88, z: 116, zoom: 18, label: "Private Bedrooms" },
+          { x: 89, z: 94, zoom: 22, label: "Rice Farms" },
+          { x: 96, z: 112, zoom: 20, label: "Power Grid" },
+          { x: 97, z: 106, zoom: 22, label: "Defense Killbox" },
+        ];
+        const spot = showcaseSpots[(Math.floor(this.turnCount / 12)) % showcaseSpots.length];
+        await api.post("/camera", { x: spot.x, z: spot.z, zoom: spot.zoom });
+      }
+    } catch {}
+  }
+
   async advanceResearch(currentProject) {
     try {
       const resData = await api.get("/research");
@@ -487,10 +536,18 @@ export class ColonyAgent {
   }
 
   async run(turns = 20) {
-    console.log(`Starting High-Speed ColonyAgent loop for ${turns} turns (stepMs: ${this.stepMs}, speed: ${this.speed})...`);
+    const isInfinite = turns === 0 || turns === -1;
+    console.log(`Starting High-Speed ColonyAgent loop for ${isInfinite ? "infinite" : turns} turns (stepMs: ${this.stepMs}, speed: ${this.speed})...`);
     await this.checkHealth();
-    for (let i = 0; i < turns; i++) {
-      await this.runTurn();
+    let i = 0;
+    while (isInfinite || i < turns) {
+      i++;
+      try {
+        await this.runTurn();
+      } catch (err) {
+        console.error(`[TURN ERROR] Turn ${this.turnCount} error: ${err.message}`);
+        await new Promise((r) => setTimeout(r, 2000));
+      }
     }
     console.log(`Completed ${turns} high-speed autonomous turns successfully.`);
   }
@@ -506,6 +563,7 @@ if (process.argv[1]?.endsWith("colony-agent.mjs")) {
 
   for (const arg of process.argv.slice(2)) {
     if (arg.startsWith("--turns=")) turns = parseInt(arg.split("=")[1], 10);
+    if (arg === "--continuous" || arg === "--daemon") turns = 0;
     if (arg.startsWith("--speed=")) speed = parseInt(arg.split("=")[1], 10);
     if (arg.startsWith("--step-ms=")) stepMs = parseInt(arg.split("=")[1], 10);
     if (arg === "--fast") {

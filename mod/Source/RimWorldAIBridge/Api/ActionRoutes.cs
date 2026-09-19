@@ -145,7 +145,23 @@ namespace RimWorldAIBridge
                     if (area == null && a != "none" && a != "") throw new BridgeException("No area '" + a + "'.");
                     p.playerSettings.AreaRestrictionInPawnCurrentMap = area;
                 }
+                if (r.HasArg("prisonerMode") && p.guest != null)
+                {
+                    string pm = r.Arg("prisonerMode");
+                    var mode = DefDatabase<PrisonerInteractionModeDef>.AllDefsListForReading.FirstOrDefault(x => string.Equals(x.defName, pm, StringComparison.OrdinalIgnoreCase) || string.Equals(x.label, pm, StringComparison.OrdinalIgnoreCase));
+                    if (mode != null) p.guest.SetExclusiveInteraction(mode);
+                }
                 return Bridge.Ok("pawn", Serializers.Pawn(p, true));
+            });
+
+            Doc(s, "ANY", "/bed/settings", "Configure a bed. {thing: bedId, forPrisoners: bool, medical: bool}", r =>
+            {
+                var map = Lookup.MapFrom(r);
+                var t = Lookup.FindThing(map, r.Arg("thing"));
+                if (!(t is Building_Bed bed)) throw new BridgeException("Thing is not a bed.");
+                if (r.HasArg("forPrisoners")) bed.ForPrisoners = r.ArgBool("forPrisoners");
+                if (r.HasArg("medical")) bed.Medical = r.ArgBool("medical");
+                return Bridge.Ok("bed", t.thingIDNumber, "forPrisoners", bed.ForPrisoners, "medical", bed.Medical);
             });
 
             // ---------------------------------------------------------- designations

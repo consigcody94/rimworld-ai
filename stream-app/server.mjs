@@ -46,12 +46,20 @@ let agentThoughts = [
   "[Combat] Repelled manhunter attack with drafted volley; 100% tended.",
 ];
 
+import { VoiceEngine } from "./voice.mjs";
+
+const voiceEngine = new VoiceEngine({
+  voiceName: env.VOICE_NAME || process.env.VOICE_NAME || "Daniel",
+  rate: 185,
+});
+
 // Initialize Engines
 const chatEngine = new TwitchChatEngine({
   channel: env.TWITCH_CHANNEL || process.env.TWITCH_CHANNEL || "",
   botUsername: env.TWITCH_BOT_USERNAME || process.env.TWITCH_BOT_USERNAME || "",
   oauthToken: env.TWITCH_BOT_OAUTH || process.env.TWITCH_BOT_OAUTH || "",
   bridgeUrl: BRIDGE_URL,
+  voiceEngine,
 });
 
 const streamEngine = new StreamEngine({
@@ -180,6 +188,17 @@ const server = http.createServer(async (req, res) => {
         if (agentThoughts.length > 20) agentThoughts.shift();
       }
       return sendJson(res, 200, { ok: true, count: agentThoughts.length });
+    }
+
+    // ------------------------------------------------------------------------
+    // API: Trigger AI Voice Commentary
+    // ------------------------------------------------------------------------
+    if (pathname === "/api/voice/speak" && req.method === "POST") {
+      const body = await parseJsonBody(req);
+      if (body.text) {
+        voiceEngine.speak(body.text);
+      }
+      return sendJson(res, 200, { ok: true, spoken: body.text });
     }
 
     // ------------------------------------------------------------------------
