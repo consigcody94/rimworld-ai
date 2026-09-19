@@ -241,9 +241,16 @@ export class ColonyAgent {
     // 8. Trade.
     if (this.every("trade", 20)) await this.manageTrade();
 
-    // 9. Work priorities for new arrivals, supply hygiene.
+    // 9. Work priorities for new arrivals, supply hygiene, and prisoner recruitment.
     if (this.every("work", 30)) await this.manageWork(colonists);
+    if (this.every("prisoners", 15)) await this.managePrisoners(colonists, snap);
     if (this.every("supplies", 40)) await this.manageSupplies(resources);
+
+    // Check colony expansion milestone
+    if (colonists.length >= 10 && this.every("milestone-10", 300)) {
+      await this.thought(`MILESTONE ACHIEVED: Colony has ${colonists.length} living colonists!`);
+      await this.say("milestone-10", `Ten colonists thriving in Caveman Empire. The goal is reached.`, 0, "high");
+    }
 
     // 10. Daily save and day commentary.
     if (day !== this.lastDay) await this.onNewDay(day, snap, colonists);
@@ -587,12 +594,83 @@ export class ColonyAgent {
       await this.place(`bed-${i}`, "Bed", b.x + 5 + (i % 4) * 2, b.z + 8 + Math.floor(i / 4) * 3, { stuff: "WoodLog", rot: 0 });
     }
 
+    // Perimeter wooden spike traps: cheap defense against mad animals and raiders
+    if (wood >= 90) {
+      const trapCoords = [
+        [b.x, b.z - 6], [b.x + 4, b.z - 5], [b.x - 4, b.z - 5],
+        [b.x + 6, b.z], [b.x - 6, b.z - 2], [b.x, b.z + 6]
+      ];
+      for (let i = 0; i < trapCoords.length; i++) {
+        const [tx, tz] = trapCoords[i];
+        await this.place(`trap-${i}`, "TrapSpike", tx, tz, { stuff: "WoodLog" });
+      }
+    }
+
+    // Prisoner recruitment hut: 5x5 wooden walls at (b.x + 10, b.z) with a bed set for prisoners
+    if (wood >= 130 && !this.placed.has("prison_hut")) {
+      const px = b.x + 10, pz = b.z;
+      const prisonItems = [];
+      for (let x = px - 2; x <= px + 2; x++) {
+        prisonItems.push({ def: "Wall", stuff: "WoodLog", x, z: pz + 2 });
+        if (x !== px) prisonItems.push({ def: "Wall", stuff: "WoodLog", x, z: pz - 2 });
+      }
+      for (let z = pz - 1; z <= pz + 1; z++) {
+        prisonItems.push({ def: "Wall", stuff: "WoodLog", x: px - 2, z });
+        prisonItems.push({ def: "Wall", stuff: "WoodLog", x: px + 2, z });
+      }
+      prisonItems.push({ def: "Door", stuff: "WoodLog", x: px, z: pz - 2 });
+      const r = await api.tryPost("/build/bulk", { items: prisonItems });
+      if (r) {
+        this.placed.set("prison_hut", { def: "Wall", x: px, z: pz });
+        await this.place("prison_bed", "Bed", px, pz, { stuff: "WoodLog", rot: 0 });
+        await this.thought("Prisoner hut and bed placed for recruitment.");
+      }
+    }
+
     // Research bench when the materials exist.
     if (wood >= 100 && steel >= 25 && !built.has("SimpleResearchBench")) {
       if (await this.place("research", "SimpleResearchBench", b.x + 6, b.z - 2, { stuff: "WoodLog", rot: 0 })) {
         await this.thought("Research bench placed. The climb out of the stone age starts here.");
         await this.say("bench", "Research bench going down. Time to start climbing the tech tree the honest way.", 0, "high");
       }
+    }
+  }
+
+  async managePrisoners(colonists, snap) {
+    try {
+      const beds = await api.get("/things?cat=Building&player=1&def=Bed");
+      const pBed = (beds.things ?? []).find(t => dist(t, { x: this.base.x + 10, z: this.base.z }) < 4);
+      if (pBed && !pBed.forPrisoners) {
+        await api.tryPost("/bed/settings", { thing: pBed.id, forPrisoners: true });
+      }
+    } catch {}
+
+    try {
+      const prisoners = await api.get("/pawns?role=prisoner");
+      for (const p of prisoners.pawns ?? []) {
+        if (!this.configured.has(`recruit-${p.id}`)) {
+          await api.tryPost("/pawn/settings", { pawn: p.id, prisonerMode: "Recruit", medicalCare: "Best" });
+          this.configured.add(`recruit-${p.id}`);
+          await this.thought(`Prisoner ${p.name} set to Recruit mode.`);
+        }
+      }
+    } catch {}
+
+    const doctor = colonists.find(c => !c.downed && !c.drafted);
+    if (doctor) {
+      try {
+        const downedHostiles = (snap.hostiles ?? []).filter(h => h.downed && !h.dead && (h.role === "enemy" || h.kind?.includes("colonist") || h.kind?.includes("tribal") || h.kind?.includes("pirate") || h.kind?.includes("raider")));
+        if (downedHostiles.length > 0) {
+          const target = downedHostiles[0];
+          const beds = await api.get("/things?cat=Building&player=1&def=Bed");
+          const pBed = (beds.things ?? []).find(t => t.forPrisoners) ?? (beds.things ?? [])[0];
+          if (pBed) {
+            await api.tryPost("/job", { pawn: doctor.id, job: "Capture", targetA: target.id, targetB: pBed.id });
+            await this.thought(`Capturing downed enemy ${target.name ?? target.id} for recruitment.`);
+            await this.say("capture", `Enemy downed. Capturing them to tend their wounds and recruit them.`, 60000, "high");
+          }
+        }
+      } catch {}
     }
   }
 
@@ -665,8 +743,8 @@ export class ColonyAgent {
         Research: lvl("Intellectual") >= 4 ? 2 : 3,
         Tailoring: 3,
         Smithing: 3,
-        Cleaning: colonists.length >= 4 ? 4 : 0,
-        Art: 0, Handling: 0, Warden: 0, Childcare: colonists.length >= 3 ? 3 : 0,
+        Cleaning: 0,
+        Art: 0, Handling: 0, Warden: lvl("Social") >= 2 ? 1 : 2, Childcare: colonists.length >= 3 ? 3 : 0,
       };
       await api.tryPost("/work/bulk", { pawn: p.id, priorities });
       this.configured.add(`work-${p.id}`);

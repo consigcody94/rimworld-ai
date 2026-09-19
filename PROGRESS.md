@@ -1,49 +1,24 @@
 # RimWorld AI Bridge Progress
 
-## Milestones
-- [done] 1. Fix runInBackground and loading stalls in mod and engine config
-- [done] 2. Add /health, /snapshot, and single-agent ownership lock
-- [done] 3. Build and test mod DLL; verify live endpoints and MCP tools on localhost:18800
-- [done] 4. Update MCP client and documentation (README, guide, smoke tests)
-- [done] 5. Start a clean no-Dev-Mode colony benchmark and verify save/load recovery
-- [done] 6. Execute autonomous colony management run (priorities, beds, food, research, orders)
-- [done] 7. Implement Allow Tool suite (/allow, /forbid, rimworld_allow) supporting map, home, rect, and def filters
-- [done] 8. Integrate RimOp optimization spreadsheet heuristics into colony-agent.mjs and establish Healroot cultivation
-- [done] 9. Build live streaming studio application (stream-app/) with Twitch OAuth, chat commands, and 1080p HUD overlay
-- [done] 10. Implement high-speed tactical combat defense doctrine (cover acquisition, shelter evacuation, 250ms loop)
-- [done] 11. Construct electrical power grid (generator, battery in shelter, conduits) and advance to Solar Panels research
+- [done] 1. Native 60fps follow camera with deadzone and dynamic zoom
+- [done] 2. In-game Twitch Chat HUD replacing learning helper
+- [done] 3. Vocello neural text-to-speech integration on Apple Silicon
+- [done] 4. Commit and push all streaming and mod enhancements to GitHub
+- [done] 5. Launch Twitch live broadcast stream and greeting
+- [doing] 6. Autonomous Naked Brutality founder survival (founder hut, food, campfire, spike defense)
+- [todo] 7. Technology progression: Complex Furniture, Stonecutting, Electricity, Batteries
+- [todo] 8. Prisoner recruitment facility and medical clinic
+- [todo] 9. Colony expansion to 5 colonists with individual bedrooms and agriculture
+- [todo] 10. Colony expansion to 10 colonists with spacer-transition infrastructure
 
 ## Now
-Colony NewDawn running stably on Day 11. Batteries research completed (100%), Solar Panels research underway (5%), electrical power grid constructed with generator and indoor battery, and streaming studio standing by on localhost:18888.
+Colony agent actively managing Caveman Empire founder V at 60fps follow camera, streaming live to Twitch #sonoflilith94 with Vocello TTS commentary and in-game HUD overlay.
 
 ## Log
-- 2026-09-19T01:18:00Z Root cause identified: Prefs.xml runInBackground was False, causing Unity Update loop to halt whenever RimWorld lost window focus.
-- 2026-09-19T01:21:00Z Added Application.runInBackground enforcement in C# mod code and Prefs.xml.
-- 2026-09-19T01:22:00Z Implemented /health, /snapshot, /agent/claim, /agent/release, and /agent/owner endpoints; compiled mod DLL and updated MCP TypeScript server.
-- 2026-09-19T01:22:45Z Passed MCP smoke tests for health, status, and agent ownership leasing with exit code 0.
-- 2026-09-19T01:31:00Z Claimed agent control lease; assigned optimal manual work priorities based on colonist skills and traits.
-- 2026-09-19T01:32:00Z Created Main Stockpile, Chunk Dumping zone, and Rice Field; unforbid all crashlanded items.
-- 2026-09-19T01:35:00Z Constructed 9x7 enclosed wooden shelter with door, roof, table, dining chairs, torch lighting, and comfortable 22C temperature.
-- 2026-09-19T01:38:00Z Completed SimpleResearchBench and active Batteries research project; saved NewDawn_Day9.
-- 2026-09-19T01:41:00Z Implemented autonomous playing script scripts/colony-agent.mjs incorporating JKV Optimization Guide rules.
-- 2026-09-19T01:44:00Z Neutralized manhunter hare attack without colonist loss using drafted rifle volley; treated and bandaged all wounds with medicine.
-- 2026-09-19T01:47:00Z Reached Day 11 with 81% Batteries progress, high colonist mood (57% to 69%), and clean daily save NewDawn_Day11.
-- 2026-09-19T01:53:00Z Implemented Allow Tool in ActionRoutes.cs with /allow and /forbid endpoints; updated MCP server with rimworld_allow and rimworld_forbid.
-- 2026-09-19T01:54:00Z Parsed RimOp.xlsx spreadsheet; applied herbal medicine (Healroot) cultivation priority and specialized work priorities.
-- 2026-09-19T01:56:00Z Verified 5-turn autonomous agent loop with wild supply hygiene; committed and pushed to GitHub.
-- 2026-09-19T02:02:00Z Built custom live streaming studio application in stream-app/ with Twitch OAuth, chat commands, and 1080p HUD overlay.
-- 2026-09-19T02:05:00Z Implemented high-speed tactical combat response in scripts/colony-agent.mjs with rapid cover positioning and 250ms focus-fire loop.
-- 2026-09-19T02:09:00Z Completed Batteries research project (100%) and transitioned automatically to SolarPanels.
-- 2026-09-19T02:10:00Z Constructed electrical power grid: WoodFiredGenerator (96, 112), Battery inside sheltered room (91, 112), and PowerConduit network.
-
-## STATUS: READY
-Delivered:
-- Command-driven AI Bridge mod compiled and active at localhost:18800.
-- Fully working Model Context Protocol (MCP) server with 65 tools covering observation, control, time pacing, zoning, allow tool, and persistence.
-- Allow Tool feature suite: /allow and /forbid endpoints supporting all, home, rect, cells, things, and defName filters.
-- Autonomous playing script (scripts/colony-agent.mjs) implementing high-speed tactical combat defense, power grid construction, and dynamic tech progression.
-- Live streaming studio application (stream-app/) running at localhost:18888 with Twitch OAuth, chat bot, and transparent 1080p HUD overlay.
-- Non-cheated (devMode=false, godMode=false) colony NewDawn running stably on Day 11 with electrical grid, completed Batteries research, active Solar Panels research, food security, and medical recovery.
-Remaining:
-- Connect Twitch channel credentials in Studio Dashboard (http://localhost:18888) or .env to start broadcasting live.
-- Continue scaling research tree into Smithing and Gunsmithing; construct walk-in freezer and electric cooking station.
+- 2026-09-19T11:00:00Z Implemented FollowCamera.cs with 60fps lerp tracking, deadzone, and context-dependent zoom.
+- 2026-09-19T11:05:00Z Implemented TwitchChatHUD.cs native IMGUI chat overlay in top-right corner; disabled AdaptiveTraining in engine prefs.
+- 2026-09-19T11:15:00Z Integrated Vocello Qwen3-TTS 4-bit 1.7B Metal TTS engine on Apple Silicon with fallback to Siri Neural voice.
+- 2026-09-19T11:36:15Z Committed and pushed all streaming enhancements, trade API, follow camera, and HUD to GitHub origin/main.
+- 2026-09-19T11:38:50Z Started fresh Naked Brutality permadeath game Caveman Empire with curated founder V (Medicine 12**, Plants 6*, Intellectual 6*).
+- 2026-09-19T11:39:45Z Twitch live broadcast active at ~30fps 2674 kbits/s with in-game chat HUD and Vocello greeting commentary.
+- 2026-09-19T11:41:00Z Configured strict anti-dirt policy (Cleaning: 0), perimeter spike defense, and prisoner recruitment pipeline.
