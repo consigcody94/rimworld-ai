@@ -23,6 +23,24 @@ const CANVAS_WIDTH = 1920;
 const CANVAS_HEIGHT = 1080;
 const AUDIO_RATE = 48000;
 const AUDIO_CHANNELS = 2;
+const AUDIO_BITRATE = "160k";
+
+// Twitch ingest ceiling for non-partners is ~6000 kbps video, and the keyframe
+// interval must be 2 seconds.
+const TWITCH_MAX_VIDEO_KBPS = 6000;
+const KEYFRAME_SECONDS = 2;
+
+/** "6000k" | "6000" | 6000 -> 6000 (kbps). Returns null when unparseable. */
+function parseKbps(value) {
+  if (value == null) return null;
+  const m = String(value).trim().match(/^(\d+(?:\.\d+)?)\s*([kKmM]?)$/);
+  if (!m) return null;
+  const n = parseFloat(m[1]);
+  if (!Number.isFinite(n)) return null;
+  const unit = m[2].toLowerCase();
+  if (unit === "m") return Math.round(n * 1000);
+  return Math.round(n); // bare numbers and "k" are both treated as kbps
+}
 
 const RESTART_DELAY_MS = 3000;
 const MAX_RESTARTS = 5;
@@ -31,8 +49,21 @@ export class StreamEngine {
   constructor(options = {}) {
     this.streamKey = options.streamKey ?? "";
     this.ingestServer = options.ingestServer ?? "rtmp://live.twitch.tv/app";
-    this.fps = options.fps ?? 30;
-    this.bitrate = options.bitrate ?? "4500k";
+    // fps and bitrate are overridable by the caller, then by env, then default.
+    // 30 is the default; 60 is supported (the gop follows fps automatically).
+    this.fps = options.fps ?? parseKbps(process.env.STREAM_FPS) ?? 30;
+    const requestedKbps =
+      parseKbps(options.bitrate) ?? parseKbps(process.env.STREAM_BITRATE) ?? TWITCH_MAX_VIDEO_KBPS;
+    if (requestedKbps > TWITCH_MAX_VIDEO_KBPS) {
+      console.warn(
+        `[StreamEngine] Requested ${requestedKbps} kbps exceeds the Twitch non-partner ceiling; clamping to ${TWITCH_MAX_VIDEO_KBPS} kbps.`
+      );
+    }
+    this.videoKbps = Math.min(requestedKbps, TWITCH_MAX_VIDEO_KBPS);
+    this.bitrate = `${this.videoKbps}k`;
+    // A 2 second VBV buffer is what Twitch's ingest expects alongside maxrate.
+    this.bufsize = `${this.videoKbps * 2}k`;
+    this.audioBitrate = options.audioBitrate ?? AUDIO_BITRATE;
     this.resolution = options.resolution ?? `${CANVAS_WIDTH}x${CANVAS_HEIGHT}`;
     this.deviceIndex = options.deviceIndex ?? "3";
 
@@ -56,6 +87,14 @@ export class StreamEngine {
       startedAt: null,
       error: null,
       captureState: "idle", // "capturing" | "window-lost" | "idle"
+      // Additive telemetry. Existing field names above are untouched because
+      // server.mjs spreads this object straight into /api/stream/status.
+      restartCount: 0,
+      targetFps: this.fps,
+      targetBitrate: this.bitrate,
+      maxrate: this.bitrate,
+      bufsize: this.bufsize,
+      keyframeSeconds: KEYFRAME_SECONDS,
     };
     this.listeners = new Set();
   }
@@ -94,10 +133,88 @@ export class StreamEngine {
     this.requested = true;
     this.stopping = false;
     this.restartCount = 0;
+    this.stats.restartCount = 0;
     this.lastStartArgs = { key: customKey, testFile };
 
     this.launch(key, testFile);
     return { ok: true, status: testFile ? "recording" : "broadcasting" };
+  }
+
+  /**
+   * The full ffmpeg argument vector. Broken out so the exact list can be
+   * inspected and validated without spawning a capture device.
+   *
+   * Quality notes (all options verified against `ffmpeg -h encoder=h264_videotoolbox`
+   * on this machine; nothing here is passed speculatively):
+   *   -profile:v high -level 4.2  High profile is what Twitch wants at 1080p.
+   *   -coder cabac                CABAC over CAVLC: a real bitrate saving on fine
+   *                               UI text, which is the whole point here.
+   *   -allow_sw 1                 lets the encoder fall back to software rather
+   *                               than dying if the VideoToolbox session is busy.
+   *   -realtime 1                 required for live capture pacing.
+   *   -g / -keyint_min            pinned to exactly KEYFRAME_SECONDS of frames so
+   *                               keyframes land on a fixed 2 s cadence.
+   *   bt709 + -color_range tv     correct color signalling for Twitch, and
+   *                               -color_range tv also silences VideoToolbox's
+   *                               "Color range not set" warning.
+   *
+   * @param {{width:number,height:number,outputFormat:string,target:string}} o
+   * @returns {string[]}
+   */
+  buildFfmpegArgs({ width, height, outputFormat, target }) {
+    const gop = Math.max(1, Math.round(this.fps * KEYFRAME_SECONDS));
+
+    const args = [
+      "-y",
+      // ---- video input: raw BGRA from capture-window on stdin ----
+      "-thread_queue_size", "512",
+      "-f", "rawvideo",
+      "-pixel_format", "bgra",
+      "-video_size", `${width}x${height}`,
+      "-framerate", String(this.fps),
+      "-i", "pipe:0",
+      // ---- audio input: system audio from ScreenCaptureKit, never the microphone ----
+      "-thread_queue_size", "512",
+      "-f", "f32le",
+      "-ar", String(AUDIO_RATE),
+      "-ac", String(AUDIO_CHANNELS),
+      "-i", "pipe:3",
+      // ---- video encode ----
+      "-c:v", "h264_videotoolbox",
+      "-realtime", "1",
+      "-allow_sw", "1",
+      "-profile:v", "high",
+      "-level", "4.2",
+      "-coder", "cabac",
+      "-b:v", this.bitrate,
+      "-maxrate", this.bitrate,
+      "-bufsize", this.bufsize,
+      "-g", String(gop),
+      "-keyint_min", String(gop),
+      "-r", String(this.fps),
+      // ---- color: correct signalling for Twitch ----
+      "-pix_fmt", "yuv420p",
+      "-color_primaries", "bt709",
+      "-color_trc", "bt709",
+      "-colorspace", "bt709",
+      "-color_range", "tv",
+      // ---- audio encode ----
+      "-c:a", "aac",
+      "-b:a", this.audioBitrate,
+      "-ar", String(AUDIO_RATE),
+      "-ac", String(AUDIO_CHANNELS),
+    ];
+
+    if (outputFormat === "mp4") {
+      args.push("-movflags", "+faststart");
+    } else if (outputFormat === "flv") {
+      // Valid on the flv muxer (encode side). Keeps the muxer from writing
+      // bogus zero duration/filesize metadata into a live stream.
+      args.push("-flvflags", "no_duration_filesize");
+    }
+
+    args.push("-f", outputFormat, target);
+    return args;
   }
 
   /** Spawns capture + ffmpeg. Used by start() and by the auto-restart path. */
@@ -120,7 +237,11 @@ export class StreamEngine {
       console.warn(`[StreamEngine] Warning: --dims failed, using ${width}x${height}: ${e.message}`);
     }
 
-    console.log(`[StreamEngine] Output canvas: ${width}x${height} @ ${this.fps}fps (ScreenCaptureKit scales + letterboxes)`);
+    console.log(
+      `[StreamEngine] Output canvas: ${width}x${height} @ ${this.fps}fps, ` +
+        `${this.bitrate} video (maxrate ${this.bitrate}, bufsize ${this.bufsize}), ` +
+        `${KEYFRAME_SECONDS}s keyframes (ScreenCaptureKit scales + letterboxes)`
+    );
 
     // 1. Native ScreenCaptureKit capture: fd1 = video, fd2 = status, fd3 = audio.
     //    fd2 is piped (not inherited) purely so captureState can be parsed; every
@@ -143,38 +264,7 @@ export class StreamEngine {
     }
 
     // 2. FFmpeg: raw video on pipe:0, raw PCM on pipe:3, VideoToolbox H.264 + AAC.
-    const args = [
-      "-y",
-      // video input
-      "-thread_queue_size", "512",
-      "-f", "rawvideo",
-      "-pixel_format", "bgra",
-      "-video_size", `${width}x${height}`,
-      "-framerate", String(this.fps),
-      "-i", "pipe:0",
-      // audio input (system audio from ScreenCaptureKit, never the microphone)
-      "-thread_queue_size", "512",
-      "-f", "f32le",
-      "-ar", String(AUDIO_RATE),
-      "-ac", String(AUDIO_CHANNELS),
-      "-i", "pipe:3",
-      // video encode
-      "-c:v", "h264_videotoolbox",
-      "-realtime", "1",
-      "-b:v", this.bitrate,
-      "-maxrate", this.bitrate,
-      "-bufsize", "9000k",
-      "-g", String(this.fps * 2),
-      "-pix_fmt", "yuv420p",
-      // audio encode
-      "-c:a", "aac",
-      "-b:a", "160k",
-      "-ar", String(AUDIO_RATE),
-    ];
-    if (outputFormat === "mp4") {
-      args.push("-movflags", "+faststart");
-    }
-    args.push("-f", outputFormat, target);
+    const args = this.buildFfmpegArgs({ width, height, outputFormat, target });
 
     console.log(`[StreamEngine] Spawning FFmpeg (h264_videotoolbox + aac, no microphone input)...`);
     this.child = spawn("ffmpeg", args, { stdio: ["pipe", "pipe", "pipe", "pipe"] });
@@ -283,6 +373,7 @@ export class StreamEngine {
       return;
     }
     this.restartCount += 1;
+    this.stats.restartCount = this.restartCount;
     this.stats.error = `${reason}; restarting (attempt ${this.restartCount}/${MAX_RESTARTS}) in ${RESTART_DELAY_MS / 1000}s`;
     this.emitStats();
     console.error(`[StreamEngine] ${this.stats.error}`);

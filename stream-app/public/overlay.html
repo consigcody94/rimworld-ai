@@ -2,69 +2,145 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>RimWorld AI Stream Overlay</title>
+  <meta name="viewport" content="width=1920, height=1080">
+  <title>RimWorld AI Broadcast Overlay</title>
   <link rel="stylesheet" href="overlay.css">
 </head>
+<!--
+  1920x1080 broadcast overlay for OBS. Transparent background, composited over gameplay.
+
+  Load the whole thing:            http://localhost:18888/overlay
+  Load only some panels:           http://localhost:18888/overlay?parts=chat,alerts
+  Valid parts: chat, alerts, hud, poll, voice   (default: all)
+
+  Panels not named in ?parts= are removed from the DOM entirely, so each one can
+  be its own OBS browser source without stacking invisible boxes.
+-->
 <body>
-  <div class="overlay-container">
-    <!-- Top Telemetry Header -->
-    <header class="top-bar">
-      <div class="colony-info">
-        <span class="badge-ai">AI AUTONOMOUS</span>
-        <span class="colony-name" id="colony-name">Persona Core</span>
-        <span class="divider">/</span>
-        <span class="game-date" id="game-date">11th of Aprimay, 5500, 4h</span>
-        <span class="divider">/</span>
-        <span class="game-weather" id="game-weather">10C Clear</span>
+  <div class="stage" id="stage">
+
+    <!-- Particle burst layer for the bigger alerts. Sits behind the panels. -->
+    <canvas class="fx-canvas" id="fx-canvas" width="1840" height="1000" aria-hidden="true"></canvas>
+
+    <!-- ================= ALERT LAYER ================= -->
+    <div class="alert-layer" data-part="alerts" id="alert-layer">
+      <div class="alert-banner" id="alert-banner" data-kind="" hidden>
+        <div class="alert-glyph" id="alert-glyph" aria-hidden="true"></div>
+        <div class="alert-copy">
+          <div class="alert-kicker" id="alert-kicker">New follower</div>
+          <div class="alert-headline" id="alert-headline">Someone</div>
+          <div class="alert-sub" id="alert-sub"></div>
+        </div>
+        <div class="alert-amount" id="alert-amount" hidden></div>
+        <div class="alert-sheen" aria-hidden="true"></div>
+        <!-- CSS-only sparkle fallback, used when the canvas is unavailable -->
+        <div class="alert-sparkles" id="alert-sparkles" aria-hidden="true">
+          <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+          <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+        </div>
       </div>
-      <div class="storyteller-info">
-        <span class="storyteller" id="storyteller">Cassandra Classic</span>
-        <span class="badge-dev">NO DEV MODE</span>
+    </div>
+
+    <!-- ================= TOP BAR (HUD) ================= -->
+    <header class="topbar" data-part="hud">
+      <div class="panel pill pill-colony">
+        <span class="tag tag-ai">AI AUTONOMOUS</span>
+        <span class="colony-name" id="colony-name">Colony</span>
+        <span class="vsep" aria-hidden="true"></span>
+        <span class="game-date" id="game-date">Waiting for the colony bridge</span>
+        <span class="vsep" aria-hidden="true"></span>
+        <span class="weather-group">
+          <span class="weather" id="game-weather">unknown</span>
+          <span class="temp" id="game-temp"></span>
+        </span>
+      </div>
+      <div class="panel pill pill-speed">
+        <span class="speed-label">SPEED</span>
+        <span class="speed-value" id="game-speed">1x</span>
       </div>
     </header>
 
-    <!-- Stockpile Resources Summary -->
-    <div class="resources-bar" id="resources-bar">
-      <div class="res-item"><span class="res-icon">🍲</span> <span id="res-food">34 Meals</span></div>
-      <div class="res-item"><span class="res-icon">🌿</span> <span id="res-med">30 Meds</span></div>
-      <div class="res-item"><span class="res-icon">🪵</span> <span id="res-wood">486 Wood</span></div>
-      <div class="res-item"><span class="res-icon">⚙️</span> <span id="res-steel">1145 Steel</span></div>
-      <div class="res-item"><span class="res-icon">🔋</span> <span id="res-comp">30 Comp</span></div>
+    <!-- ================= LEFT RAIL ================= -->
+    <div class="rail rail-left" id="rail-left">
+
+      <section class="panel card card-research" data-part="hud" id="card-research">
+        <div class="card-head">
+          <span class="card-title">Research</span>
+          <span class="card-meta" id="research-pct">0%</span>
+        </div>
+        <div class="research-name" id="research-name">No active project</div>
+        <div class="bar bar-lg">
+          <div class="bar-fill bar-research" id="research-fill" style="width:0%"></div>
+        </div>
+      </section>
+
+      <section class="panel card card-stock" data-part="hud" id="card-stock">
+        <div class="card-head">
+          <span class="card-title">Stockpile</span>
+          <span class="card-meta" id="stock-food">food 0d</span>
+        </div>
+        <div class="stock-grid" id="stock-grid">
+          <div class="stock-empty">No stockpile data</div>
+        </div>
+      </section>
+
+      <section class="panel card card-colonists" data-part="hud" id="card-colonists">
+        <div class="card-head">
+          <span class="card-title">Colonists</span>
+          <span class="card-meta" id="colonist-count">0</span>
+        </div>
+        <div class="colonist-list" id="colonist-list">
+          <div class="empty-note">Waiting for colonist telemetry</div>
+        </div>
+      </section>
+
+      <section class="panel card card-thoughts" data-part="hud" id="card-thoughts">
+        <div class="card-head">
+          <span class="card-title">AI reasoning</span>
+          <span class="card-meta live-dot" id="brain-meta">idle</span>
+        </div>
+        <div class="thought-feed" id="thought-feed">
+          <div class="empty-note">No reasoning yet</div>
+        </div>
+      </section>
+
     </div>
 
-    <!-- Active Research Banner -->
-    <div class="research-banner" id="research-banner">
-      <div class="research-header">
-        <span class="label">CURRENT RESEARCH</span>
-        <span class="tech-name" id="research-name">Batteries (81%)</span>
-      </div>
-      <div class="progress-track">
-        <div class="progress-fill" id="research-fill" style="width: 81%;"></div>
-      </div>
+    <!-- ================= RIGHT RAIL ================= -->
+    <div class="rail rail-right" id="rail-right">
+
+      <section class="panel card card-voice" data-part="voice" id="card-voice" data-state="idle">
+        <div class="voice-head">
+          <div class="voice-viz" aria-hidden="true">
+            <i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+          </div>
+          <span class="voice-label" id="voice-label">Voice idle</span>
+        </div>
+        <div class="voice-caption" id="voice-caption"></div>
+      </section>
+
+      <section class="panel card card-poll" data-part="poll" id="card-poll">
+        <div class="card-head">
+          <span class="card-title">Viewer vote</span>
+          <span class="card-meta" id="poll-total">0 votes</span>
+        </div>
+        <div class="poll-list" id="poll-list">
+          <div class="empty-note">Type <b>!vote &lt;choice&gt;</b> in chat to open a vote</div>
+        </div>
+      </section>
+
+      <section class="panel card card-chat" data-part="chat" id="card-chat">
+        <div class="card-head">
+          <span class="card-title">Twitch chat</span>
+          <span class="card-meta" id="chat-channel">offline</span>
+        </div>
+        <div class="chat-feed" id="chat-feed">
+          <div class="empty-note">Chat is quiet. Try <b>!help</b></div>
+        </div>
+      </section>
+
     </div>
 
-    <!-- Colonist Status Cards -->
-    <div class="colonists-panel" id="colonists-panel">
-      <!-- Injected dynamically via overlay.js -->
-    </div>
-
-    <!-- AI Agent Decisions & Thought Log -->
-    <div class="thought-log-container">
-      <div class="panel-header">AI AGENT REASONING</div>
-      <div class="thought-feed" id="thought-feed">
-        <div class="thought-item active">[Turn 5] Unallowed wild map drops; protected 121 home supplies.</div>
-        <div class="thought-item">[Agriculture] Sowed 24-cell Healroot patch for herbal medicine.</div>
-        <div class="thought-item">[Combat] Repelled manhunter attack with drafted volley; 100% tended.</div>
-      </div>
-    </div>
-
-    <!-- Live Twitch Chat Feed & Poll -->
-    <div class="chat-ticker-container">
-      <div class="panel-header">TWITCH VIEWER INTERACTIONS</div>
-      <div class="chat-feed" id="chat-feed">
-        <div class="chat-entry"><span class="badge-bot">BOT</span> Type !help, !status, !say &lt;msg&gt; or !vote &lt;tech&gt;</div>
-      </div>
-    </div>
   </div>
 
   <script src="overlay.js"></script>

@@ -2,137 +2,196 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>RimWorld AI Stream Studio</title>
   <link rel="stylesheet" href="studio.css">
 </head>
 <body>
-  <div class="studio-layout">
-    <!-- Sidebar / Navigation -->
-    <aside class="sidebar">
-      <div class="brand">
-        <span class="logo-icon">🪐</span>
-        <div class="brand-text">
-          <h1>RIMWORLD AI</h1>
-          <span class="subtitle">Broadcast Studio</span>
-        </div>
+
+  <!-- ============================ TOP BAR ============================ -->
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <div class="brand-text">
+        <strong>RimWorld AI</strong>
+        <span>Stream Studio</span>
       </div>
+    </div>
 
-      <nav class="nav-links">
-        <a href="#broadcast" class="active">Broadcast Control</a>
-        <a href="#twitch">Twitch &amp; OAuth</a>
-        <a href="#overlay" target="_blank">Open Overlay ↗</a>
-        <a href="#help">Chat Commands</a>
-      </nav>
-
-      <div class="system-status">
-        <div class="status-row">
-          <span>Bridge API:</span>
-          <span id="bridge-badge" class="badge ok">127.0.0.1:18800</span>
-        </div>
-        <div class="status-row">
-          <span>Twitch Chat:</span>
-          <span id="twitch-badge" class="badge">Connecting...</span>
-        </div>
+    <div class="live-block">
+      <div class="live-pill" id="live-pill" data-state="offline">
+        <span class="live-dot" aria-hidden="true"></span>
+        <span class="live-text" id="live-text">OFFLINE</span>
       </div>
-    </aside>
+      <span class="capture-state" id="capture-state">capture idle</span>
+    </div>
 
-    <!-- Main Content Area -->
-    <main class="main-content">
-      <!-- Top Action Bar -->
-      <section class="broadcast-banner" id="broadcast">
-        <div class="stream-state">
-          <div class="live-indicator" id="live-indicator">
-            <span class="dot"></span>
-            <span class="label" id="stream-status-label">OFFLINE</span>
-          </div>
-          <div class="metrics" id="stream-metrics">
-            <div class="metric"><span class="m-title">FPS:</span> <span id="m-fps" class="m-val">0</span></div>
-            <div class="metric"><span class="m-title">Bitrate:</span> <span id="m-bitrate" class="m-val">0 kbps</span></div>
-            <div class="metric"><span class="m-title">Time:</span> <span id="m-time" class="m-val">00:00:00</span></div>
-            <div class="metric"><span class="m-title">Frames:</span> <span id="m-frames" class="m-val">0</span></div>
-          </div>
+    <div class="topbar-actions">
+      <a class="btn btn-ghost" href="/overlay" target="_blank" rel="noopener">Open overlay</a>
+      <button type="button" class="btn btn-primary" id="btn-stream-toggle">Start stream</button>
+    </div>
+  </header>
+
+  <!-- ============================ ENCODER STRIP ============================ -->
+  <section class="strip" aria-label="Encoder telemetry">
+    <div class="stat"><span class="stat-key">FPS</span><span class="stat-val" id="t-fps">0</span></div>
+    <div class="stat"><span class="stat-key">Bitrate</span><span class="stat-val" id="t-bitrate">0 kbits/s</span></div>
+    <div class="stat"><span class="stat-key">Speed</span><span class="stat-val" id="t-speed">0x</span></div>
+    <div class="stat"><span class="stat-key">Frames</span><span class="stat-val" id="t-frames">0</span></div>
+    <div class="stat"><span class="stat-key">Encoder time</span><span class="stat-val" id="t-time">00:00:00</span></div>
+    <div class="stat"><span class="stat-key">Uptime</span><span class="stat-val" id="t-uptime">not running</span></div>
+    <div class="stat"><span class="stat-key">Capture</span><span class="stat-val" id="t-capture">idle</span></div>
+    <div class="stat"><span class="stat-key">Restarts</span><span class="stat-val" id="t-restarts">0</span></div>
+    <div class="stat stat-wide">
+      <span class="stat-key">Target</span>
+      <span class="stat-val" id="t-target">unknown</span>
+    </div>
+  </section>
+
+  <div class="banner banner-error" id="encoder-error" hidden></div>
+
+  <!-- ============================ MAIN GRID ============================ -->
+  <main class="grid">
+
+    <!-- ---------------- LEFT COLUMN ---------------- -->
+    <div class="col">
+
+      <section class="card">
+        <div class="card-head">
+          <h2>Twitch settings</h2>
+          <span class="chip" id="chip-settings">loading</span>
         </div>
+        <div class="card-body">
 
-        <div class="stream-actions">
-          <button id="btn-stream-toggle" class="btn btn-primary btn-large">Start Stream</button>
+          <div class="field">
+            <label for="in-channel">Channel</label>
+            <div class="row">
+              <input type="text" id="in-channel" class="input" placeholder="your_twitch_username" autocomplete="off">
+              <button type="button" class="btn btn-secondary" id="btn-save-channel">Save</button>
+            </div>
+            <p class="hint">The channel the chat bot joins. Saved to the local .env file.</p>
+          </div>
+
+          <div class="field">
+            <label for="in-key">Stream key</label>
+            <div class="row">
+              <input type="password" id="in-key" class="input" placeholder="live_..." autocomplete="off">
+              <button type="button" class="btn btn-secondary" id="btn-save-key">Save</button>
+            </div>
+            <p class="hint">
+              From <a href="https://dashboard.twitch.tv/settings/stream" target="_blank" rel="noopener">dashboard.twitch.tv/settings/stream</a>.
+              Written to .env and never shown back.
+            </p>
+          </div>
+
+          <div class="field">
+            <label>Authorization</label>
+            <div class="row">
+              <a class="btn btn-twitch" href="/auth/twitch">Authorize with Twitch</a>
+              <span class="inline-status" id="oauth-status">not connected</span>
+            </div>
+            <p class="hint" id="scope-hint">
+              Alerts need these scopes on the token:
+              <code>moderator:read:followers</code>, <code>channel:read:subscriptions</code>,
+              <code>bits:read</code>, <code>channel:read:redemptions</code>.
+            </p>
+          </div>
+
+          <div class="field">
+            <label>Channel info</label>
+            <div class="row">
+              <button type="button" class="btn btn-secondary" id="btn-apply-channel-info">Set category and title</button>
+              <span class="inline-status" id="channel-info-status">not applied yet</span>
+            </div>
+          </div>
+
         </div>
       </section>
 
-      <!-- Grid: Left Preview & Telemetry, Right Twitch Chat -->
-      <div class="dashboard-grid">
-        <!-- Left: Overlay Preview & Colony Telemetry -->
-        <div class="grid-left">
-          <div class="card">
-            <div class="card-header">
-              <h2>Broadcast Overlay Preview</h2>
-              <a href="/overlay" target="_blank" class="btn-link">Pop Out</a>
-            </div>
-            <div class="preview-container">
-              <iframe src="/overlay" class="overlay-iframe"></iframe>
-            </div>
-          </div>
-
-          <!-- Twitch Credentials Card -->
-          <div class="card" id="twitch">
-            <div class="card-header">
-              <h2>Twitch Configuration &amp; OAuth</h2>
-            </div>
-            <div class="card-body">
-              <div class="form-group">
-                <label for="twitch-channel">Twitch Channel:</label>
-                <input type="text" id="twitch-channel" placeholder="e.g. your_twitch_username" class="input-text">
-              </div>
-
-              <div class="form-group">
-                <label for="twitch-key">Stream Key (RTMP):</label>
-                <div class="input-password-group">
-                  <input type="password" id="twitch-key" placeholder="live_..." class="input-text">
-                  <button id="btn-save-key" class="btn btn-secondary">Save Key</button>
-                </div>
-                <small class="hint">Find this at <a href="https://dashboard.twitch.tv/settings/stream" target="_blank">dashboard.twitch.tv/settings/stream</a>. Saved safely to local .env.</small>
-              </div>
-
-              <div class="oauth-section">
-                <h3>Bot Authentication (Optional)</h3>
-                <p>For two-way bot chat replies, authorize your bot account below. If skipped, the bot operates in anonymous listener mode.</p>
-                <button id="btn-oauth-connect" class="btn btn-twitch">Connect with Twitch</button>
-                <span id="oauth-status" class="oauth-status-text">Not connected</span>
-              </div>
-            </div>
+      <section class="card">
+        <div class="card-head">
+          <h2>EventSub</h2>
+          <span class="chip" id="chip-eventsub">not wired</span>
+        </div>
+        <div class="card-body">
+          <div class="kv" id="eventsub-meta"></div>
+          <div class="sub-list" id="eventsub-list">
+            <p class="hint">
+              No EventSub status in <code>/api/events</code> yet. Add the
+              <code>eventsub</code> field described in the wiring notes.
+            </p>
           </div>
         </div>
+      </section>
 
-        <!-- Right: Live Chat Monitor & Viewer Interaction -->
-        <div class="grid-right">
-          <div class="card card-chat">
-            <div class="card-header">
-              <h2>Live Twitch Chat &amp; Commands</h2>
-              <span class="chat-counter" id="chat-count">0 messages</span>
+      <section class="card">
+        <div class="card-head">
+          <h2>Test alerts</h2>
+          <span class="chip" id="chip-test">ready</span>
+        </div>
+        <div class="card-body">
+          <div class="row row-test">
+            <div class="field field-inline">
+              <label for="in-test-user">User</label>
+              <input type="text" id="in-test-user" class="input" value="TestViewer" autocomplete="off">
             </div>
-            <div class="chat-window" id="studio-chat-window">
-              <div class="chat-placeholder">Waiting for incoming Twitch chat messages...</div>
-            </div>
-            <div class="chat-input-bar">
-              <input type="text" id="test-chat-input" placeholder="Type a message or !command..." class="input-text">
-              <button id="btn-send-chat" class="btn btn-secondary">Send</button>
+            <div class="field field-inline field-narrow">
+              <label for="in-test-amount">Amount</label>
+              <input type="number" id="in-test-amount" class="input" placeholder="auto" min="0" autocomplete="off">
             </div>
           </div>
+          <p class="hint">Leave the amount blank to use a sensible default for each type.</p>
+          <div class="test-grid" id="test-grid"></div>
+          <div class="inline-status" id="test-status"></div>
+        </div>
+      </section>
 
-          <!-- Active Polls & Viewer Votes -->
-          <div class="card">
-            <div class="card-header">
-              <h2>Active Viewer Polls</h2>
-            </div>
-            <div class="card-body">
-              <div id="poll-container" class="poll-list">
-                <div class="poll-empty">No active votes yet. Viewers can type <code>!vote &lt;choice&gt;</code> in Twitch chat.</div>
-              </div>
-            </div>
+    </div>
+
+    <!-- ---------------- RIGHT COLUMN ---------------- -->
+    <div class="col">
+
+      <section class="card card-chat">
+        <div class="card-head">
+          <h2>Chat monitor</h2>
+          <span class="chip" id="chip-chat">offline</span>
+        </div>
+        <div class="chat-log" id="chat-log">
+          <p class="hint">Waiting for chat.</p>
+        </div>
+        <div class="chat-send">
+          <input type="text" id="in-chat" class="input" placeholder="Message, or a !command" autocomplete="off">
+          <button type="button" class="btn btn-primary" id="btn-send-chat">Send</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2>Viewer votes</h2>
+          <span class="chip" id="chip-poll">0 votes</span>
+        </div>
+        <div class="card-body">
+          <div class="poll-list" id="poll-list">
+            <p class="hint">No votes yet. Viewers use <code>!vote &lt;choice&gt;</code>.</p>
           </div>
         </div>
-      </div>
-    </main>
-  </div>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2>AI voice and brain</h2>
+          <span class="chip" id="chip-voice">idle</span>
+        </div>
+        <div class="card-body">
+          <div class="kv" id="voice-meta"></div>
+          <div class="quote" id="voice-last"></div>
+        </div>
+      </section>
+
+    </div>
+  </main>
+
+  <div class="toast" id="toast" hidden></div>
 
   <script src="studio.js"></script>
 </body>
