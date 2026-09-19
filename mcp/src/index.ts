@@ -191,7 +191,18 @@ tool("rimworld_zone_update", "Update / delete zone", "Change a zone by id (from 
 
 tool("rimworld_home_area", "Edit home area", "Add (add=true) or remove cells/rect from the Home area (colonists clean, firefight and count resources there).", { ...cellsShape, add: z.boolean().default(true) }, { method: "POST", path: "/area/home" }, ACT);
 
-tool("rimworld_forbid", "Forbid / allow items", "Set forbidden state on items by id, or all=true for every item on the map (e.g. allow everything after a raid).", { things: z.array(z.union([z.string(), z.number()])).optional(), all: z.boolean().optional(), forbidden: z.boolean().default(false) }, { method: "POST", path: "/forbid" }, ACT);
+const forbidShape = {
+  ...cellsShape,
+  things: z.array(z.union([z.string(), z.number()])).optional().describe("Thing ids to forbid or allow"),
+  all: z.boolean().optional().describe("Target every item on the map"),
+  home: z.boolean().optional().describe("Target only items in the Home area"),
+  def: z.string().optional().describe("Filter items by defName, label, or short label (e.g. 'WoodLog', 'MedicineIndustrial')"),
+  forbidden: z.boolean().optional().describe("True to forbid (unallow), false to allow"),
+};
+
+tool("rimworld_forbid", "Forbid items (Allow Tool)", "Forbid items so colonists ignore them. Target by things ids, rect, cells, home=true, or all=true. Optional def filter.", forbidShape, { method: "POST", path: "/forbid" }, ACT);
+
+tool("rimworld_allow", "Allow items (Allow Tool)", "Allow (unforbid) items so colonists can haul and use them. Target by things ids, rect, cells, home=true, or all=true. Optional def filter.", forbidShape, { method: "POST", path: "/allow" }, ACT);
 
 tool("rimworld_bill_add", "Add production bill", "Add a bill to a workbench (thing id): recipe defName (e.g. CookMealSimple, Make_MeleeWeapon_Club, Make_Apparel_Parka; rimworld_defs type=recipe q=meal), mode forever|count|target, count.", { thing: z.string(), recipe: z.string(), mode: z.enum(["forever", "count", "target"]).optional(), count: z.number().int().optional(), suspended: z.boolean().optional() }, { method: "POST", path: "/bill" }, ACT);
 

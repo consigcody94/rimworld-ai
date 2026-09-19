@@ -113,17 +113,19 @@ node scripts/colony-agent.mjs --turns=20 --step-ms=2500 --speed=3
 4. **Medical Care**:
    - Detects wounded or bleeding pawns.
    - Issues immediate bed rest and orders doctor pawns to bandage wounds with industrial medicine.
-5. **Resource Management**:
-   - Scans surrounding area for mature trees (`growth >= 0.8`) and designates lumber harvesting when wood drops below 80.
-   - Periodically unforbids freshly dropped supplies and resources.
-6. **Infrastructure & Comfort**:
+5. **Allow Tool & Supply Hygiene**:
+   - Automatically keeps wild drops outside the base unallowed/forbidden so colonists avoid dangerous long-distance hauling runs into hostile territory.
+   - Selectively allows items inside the Home area and critical supplies (industrial medicine, survival meals, components).
+6. **Lumber & Resource Foraging**:
+   - Forages mature trees (`growth >= 0.8`) when wood stockpiles drop below 100 units.
+7. **Infrastructure & Comfort**:
    - Ensures bedroom/barracks shelter is enclosed, roofed, and heated to comfortable room temperature (20C to 23C).
    - Establishes wooden dining tables and chairs to prevent the "Ate without table" debuff.
    - Maintains an outdoor campfire with active `CookMealSimple` bills.
-7. **Research Automation**:
-   - Keeps research bench staffed and automatically transitions to the next tech in the optimization tree upon completion.
-8. **Daily Save Milestones**:
-   - Automatically writes a recovery save (`NewDawn_DayX`) at the start of each in-game day.
+8. **Technology Progression**:
+   - Automatically pivots research through optimal tech tree milestones (Batteries -> SolarPanels -> Gunsmithing).
+9. **Automated Daily Persistence**:
+   - Triggers `POST /game/save` at the start of each in-game day (e.g., `NewDawn_Day11`) and safely handles 503 saving states.
 
 ---
 
@@ -178,7 +180,7 @@ Every route runs on the Unity main thread via `MainThread.cs`. Mutating routes r
 | `POST` | `/work/bulk` | Configure manual work priorities: `{"pawn": 612, "priorities": {"Doctor": 1}}` |
 | `POST` | `/pawn/settings` | Hostility response (`Flee`, `Attack`), medical care tier, allowed area. |
 
-### Construction, Zones & Bills
+### Construction, Zones & Allow Tool
 
 | Method | Route | Description |
 |---|---|---|
@@ -187,7 +189,8 @@ Every route runs on the Unity main thread via `MainThread.cs`. Mutating routes r
 | `POST` | `/designate` | Designate work: `{"type": "chop", "things": [10659, 10999]}` |
 | `POST` | `/zone` | Create zone: `{"type": "growing", "rect": {"x": 88, "z": 86, "w": 7, "h": 7}, "plant": "Plant_Rice"}` |
 | `POST` | `/zone/update` | Modify zone priority, allowed sowing, or cell boundaries. |
-| `POST` | `/forbid` | Forbid or allow items on map: `{"all": true, "forbidden": false}` |
+| `POST` | `/allow` | Allow (unforbid) items: `{"home": true}`, `{"all": true}`, or filter by `rect`, `cells`, `things`, and `def`. |
+| `POST` | `/forbid` | Forbid (unallow) items: `{"all": true}`, `{"home": true}`, `{"rect": {"x": 0, "z": 0, "w": 50, "h": 50}}`, or by item IDs. |
 | `POST` | `/bill` | Add workbench bill: `{"thing": 30689, "recipe": "CookMealSimple", "mode": "target", "count": 10}` |
 | `POST` | `/research` | Set active research project: `{"project": "Batteries"}` |
 

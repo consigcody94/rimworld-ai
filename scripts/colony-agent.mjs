@@ -2,10 +2,10 @@
 /**
  * Autonomous RimWorld Colony Agent
  * Controls RimWorld via the AI Bridge mod on localhost:18800.
- * Incorporates heuristics from the RimWorld Optimization Guide spreadsheet.
+ * Incorporates heuristics from the RimWorld Optimization Guide spreadsheet (RimOp.xlsx).
  *
  * Usage:
- *   node scripts/colony-agent.mjs [--turns=10] [--step-ms=2500] [--speed=3]
+ *   node scripts/colony-agent.mjs [--turns=10] [--step-ms=2500] [--speed=3] [--allow-mode=home|all|off] [--unallow-wild]
  */
 
 const API_BASE = (process.env.RIMWORLD_API ?? "http://127.0.0.1:18800").replace(/\/$/, "");
@@ -55,7 +55,7 @@ const api = {
 };
 
 // ============================================================================
-// Research Progression Plan (from optimization guide)
+// Research Progression Plan (from RimOp optimization guide)
 // ============================================================================
 
 const TECH_TREE_ORDER = [
@@ -80,6 +80,8 @@ export class ColonyAgent {
     this.speed = options.speed ?? 3;
     this.stepMs = options.stepMs ?? 2500;
     this.saveDaily = options.saveDaily ?? true;
+    this.allowMode = options.allowMode ?? "home"; // "home", "all", or "off"
+    this.unallowWild = options.unallowWild ?? true;
     this.lastSavedDay = null;
     this.lastLeaseClaim = 0;
     this.turnCount = 0;
@@ -163,16 +165,16 @@ export class ColonyAgent {
 
     // 4. Resource check and foraging
     const woodCount = resources.WoodLog ?? 0;
-    if (woodCount < 80 && this.turnCount % 5 === 1) {
+    if (woodCount < 100 && this.turnCount % 5 === 1) {
       await this.designateWoodChopping();
     }
 
-    // 5. Periodic item unforbid (ensure freshly dropped resources are usable)
-    if (this.turnCount % 10 === 1) {
-      await api.post("/forbid", { all: true, forbidden: false });
+    // 5. Allow Tool management: keep wild drops unallowed, allow home and vital supplies
+    if (this.turnCount % 10 === 1 && this.allowMode !== "off") {
+      await this.manageSupplies();
     }
 
-    // 6. Dismiss expired/informational letters
+    // 6. Dismiss expired or informational letters
     if (snap.letters && snap.letters.length > 3) {
       await api.post("/letter/dismiss", { all: true });
     }
@@ -202,6 +204,31 @@ export class ColonyAgent {
     const duration = hostiles.length > 0 ? 1000 : this.stepMs;
     const simSpeed = hostiles.length > 0 ? 1 : this.speed;
     await this.advanceSimulation(duration, simSpeed);
+  }
+
+  async manageSupplies() {
+    try {
+      if (this.unallowWild) {
+        // Forbid items across the entire map so colonists do not run through hostile territory
+        await api.post("/forbid", { all: true, forbidden: true });
+      }
+
+      if (this.allowMode === "home") {
+        // Selectively allow all items within the Home area
+        const res = await api.post("/allow", { home: true });
+        // Also allow vital survival goods anywhere on the map
+        const vitals = ["MedicineIndustrial", "MealSurvivalPack", "ComponentIndustrial"];
+        for (const def of vitals) {
+          await api.post("/allow", { all: true, def });
+        }
+        console.log(`[ALLOW TOOL] Unallowed wild map drops; allowed ${res.matched ?? 0} home area items.`);
+      } else if (this.allowMode === "all") {
+        const res = await api.post("/allow", { all: true });
+        console.log(`[ALLOW TOOL] Allowed all items across map (${res.changed ?? 0} changed).`);
+      }
+    } catch (e) {
+      console.warn(`[ALLOW TOOL WARN] Could not manage supplies: ${e.message}`);
+    }
   }
 
   async handleCombat(colonists, hostiles) {
@@ -260,7 +287,7 @@ export class ColonyAgent {
   }
 
   async run(turns = 10) {
-    console.log(`Starting ColonyAgent loop for ${turns} turns (stepMs: ${this.stepMs}, speed: ${this.speed})...`);
+    console.log(`Starting ColonyAgent loop for ${turns} turns (stepMs: ${this.stepMs}, speed: ${this.speed}, allowMode: ${this.allowMode}, unallowWild: ${this.unallowWild})...`);
     await this.checkHealth();
     for (let i = 0; i < turns; i++) {
       await this.runTurn();
@@ -274,14 +301,19 @@ if (process.argv[1]?.endsWith("colony-agent.mjs")) {
   let turns = 10;
   let speed = 3;
   let stepMs = 2500;
+  let allowMode = "home";
+  let unallowWild = true;
 
   for (const arg of process.argv.slice(2)) {
     if (arg.startsWith("--turns=")) turns = parseInt(arg.split("=")[1], 10);
     if (arg.startsWith("--speed=")) speed = parseInt(arg.split("=")[1], 10);
     if (arg.startsWith("--step-ms=")) stepMs = parseInt(arg.split("=")[1], 10);
+    if (arg.startsWith("--allow-mode=")) allowMode = arg.split("=")[1];
+    if (arg === "--unallow-wild") unallowWild = true;
+    if (arg === "--no-unallow-wild") unallowWild = false;
   }
 
-  const agent = new ColonyAgent({ speed, stepMs, saveDaily: true });
+  const agent = new ColonyAgent({ speed, stepMs, saveDaily: true, allowMode, unallowWild });
   agent.run(turns).catch((err) => {
     console.error("ColonyAgent encountered fatal error:", err);
     process.exit(1);

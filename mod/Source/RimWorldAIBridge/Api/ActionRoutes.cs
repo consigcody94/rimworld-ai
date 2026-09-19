@@ -269,14 +269,14 @@ namespace RimWorldAIBridge
                 return Bridge.Ok("changed", cells.Count, "homeCells", home.TrueCount);
             });
 
-            Doc(s, "ANY", "/forbid", "Forbid/allow items. {things:[id], forbidden:false}. Also {all:true, forbidden:false} allows every item on the map.", r =>
+            Doc(s, "ANY", "/forbid", "Forbid/allow items (Allow Tool). {forbidden:bool (default true), all:bool, home:bool, cells|rect, def:string, things:[id]}. 'all:true' targets entire map.", r =>
             {
-                var map = Lookup.MapFrom(r);
-                bool forbidden = r.ArgBool("forbidden", false);
-                List<Thing> things = r.ArgBool("all") ? map.listerThings.AllThings.Where(t => t.def.category == ThingCategory.Item && t.IsForbidden(Faction.OfPlayer) != forbidden).ToList() : Lookup.ThingsFrom(r, map);
-                int n = 0;
-                foreach (var t in things) { if (t.def.category != ThingCategory.Item && !(t is Building)) continue; t.SetForbidden(forbidden, false); n++; }
-                return Bridge.Ok("changed", n, "forbidden", forbidden);
+                return ForbidHandler(r, true);
+            });
+
+            Doc(s, "ANY", "/allow", "Allow (unforbid) items. Shorthand for /forbid with forbidden=false. {all:bool, home:bool, cells|rect, def:string, things:[id]}.", r =>
+            {
+                return ForbidHandler(r, false);
             });
 
             Doc(s, "ANY", "/bill", "Add a production bill to a workbench. {thing: benchId, recipe:RecipeDef, mode:forever|count|target, count:10, suspended:false}", r =>
@@ -448,6 +448,77 @@ namespace RimWorldAIBridge
         private static void RequireDev()
         {
             if (BridgeMod.Settings != null && !BridgeMod.Settings.allowDevActions) throw new BridgeException("Dev actions are disabled in mod settings.", 403);
+        }
+
+        private static object ForbidHandler(Req r, bool defaultForbidden)
+        {
+            var map = Lookup.MapFrom(r);
+            bool forbidden = defaultForbidden;
+            if (r.HasArg("forbidden")) forbidden = r.ArgBool("forbidden");
+            else if (r.HasArg("unforbid")) forbidden = !r.ArgBool("unforbid");
+
+            bool all = r.ArgBool("all", false);
+            bool homeOnly = r.ArgBool("home", false);
+            string defFilter = r.Arg("def");
+
+            List<Thing> candidates = null;
+
+            if (all || homeOnly)
+            {
+                var items = map.listerThings.AllThings.Where(t => t.def.category == ThingCategory.Item || t is Building);
+                if (homeOnly)
+                {
+                    var home = map.areaManager.Home;
+                    items = items.Where(t => home[t.Position]);
+                }
+                candidates = items.ToList();
+            }
+            else
+            {
+                var cells = Lookup.CellsFrom(r, map, required: false);
+                if (cells != null && cells.Count > 0)
+                {
+                    var set = new HashSet<IntVec3>(cells);
+                    candidates = map.listerThings.AllThings.Where(t => set.Contains(t.Position) && (t.def.category == ThingCategory.Item || t is Building)).ToList();
+                }
+                else
+                {
+                    candidates = Lookup.ThingsFrom(r, map, required: false);
+                }
+            }
+
+            if (candidates == null) candidates = new List<Thing>();
+
+            if (!string.IsNullOrEmpty(defFilter))
+            {
+                candidates = candidates.Where(t =>
+                    string.Equals(t.def.defName, defFilter, StringComparison.OrdinalIgnoreCase) ||
+                    (t.def.label != null && string.Equals(t.def.label, defFilter, StringComparison.OrdinalIgnoreCase)) ||
+                    (t.LabelShort != null && t.LabelShort.IndexOf(defFilter, StringComparison.OrdinalIgnoreCase) >= 0)
+                ).ToList();
+            }
+
+            int changed = 0;
+            foreach (var t in candidates)
+            {
+                if (t.def.category != ThingCategory.Item && !(t is Building)) continue;
+                if (t is Building && t.Faction != null && t.Faction != Faction.OfPlayer) continue;
+
+                try
+                {
+                    if (t.IsForbidden(Faction.OfPlayer) != forbidden)
+                    {
+                        t.SetForbidden(forbidden, false);
+                        if (t.IsForbidden(Faction.OfPlayer) == forbidden)
+                        {
+                            changed++;
+                        }
+                    }
+                }
+                catch { }
+            }
+
+            return Bridge.Ok("changed", changed, "forbidden", forbidden, "matched", candidates.Count);
         }
 
         private static string SafeReport(Pawn p) { try { return p.jobs?.curDriver?.GetReport(); } catch { return null; } }
