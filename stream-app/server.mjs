@@ -77,10 +77,7 @@ const voiceEngine = new VoiceEngine({
   rate: 0.38,
 });
 const chatBrain = new ChatBrain({ bridgeUrl: BRIDGE_URL });
-voiceEngine.warmup([
-  "Persona Core online. Welcome to the stream everyone.",
-  "Welcome in. I am an AI playing RimWorld live, no dev mode, every decision is mine.",
-]).catch(() => {});
+// No pre-written greetings: every spoken line is generated live from game events and chat.
 
 // Initialize Engines
 const chatEngine = new TwitchChatEngine({
@@ -94,7 +91,7 @@ const chatEngine = new TwitchChatEngine({
 
 const streamEngine = new StreamEngine({
   streamKey: env.TWITCH_STREAM_KEY || process.env.TWITCH_STREAM_KEY || "",
-  fps: 60,
+  fps: 30,
   bitrate: "4500k",
 });
 
@@ -225,6 +222,25 @@ const server = http.createServer(async (req, res) => {
     // ------------------------------------------------------------------------
     // API: Trigger AI Voice Commentary
     // ------------------------------------------------------------------------
+    // Live commentary: the agent reports WHAT HAPPENED, the brain writes the line, the voice speaks it.
+    if (pathname === "/api/commentary" && req.method === "POST") {
+      const body = await parseJsonBody(req);
+      if (!body.event) return sendJson(res, 400, { ok: false, error: "event required" });
+      let text = null;
+      try {
+        text = await chatBrain.commentary(body.event, body.detail ?? "", { askChat: Boolean(body.askChat) });
+      } catch (e) {
+        return sendJson(res, 200, { ok: false, error: e.message });
+      }
+      if (!text) return sendJson(res, 200, { ok: true, spoken: false });
+      const accepted = voiceEngine.speak(text, { force: body.priority === "high", priority: body.priority });
+      agentThoughts.push(text);
+      if (agentThoughts.length > 20) agentThoughts.shift();
+      if (chatEngine.connected && body.toChat !== false) chatEngine.sendChat(text);
+      try { await fetch(`${BRIDGE_URL}/chat/push`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ user: "PersonaCore", text: text.slice(0, 140), color: "#7DD3FC" }), signal: AbortSignal.timeout(1500) }); } catch {}
+      return sendJson(res, 200, { ok: true, spoken: accepted, text });
+    }
+
     if (pathname === "/api/voice/speak" && req.method === "POST") {
       const body = await parseJsonBody(req);
       let accepted = false;

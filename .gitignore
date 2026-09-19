@@ -10,3 +10,7 @@ stream-app/bin/
 .DS_Store
 Vocello/
 stream-app/.voice-cache/
+
+# Runtime state
+logs/
+.agent-state/

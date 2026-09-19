@@ -33,6 +33,8 @@ export class ChatBrain {
     this.lastReplyByUser = new Map();
     this.lastSnapshot = null;
     this.lastSnapshotAt = 0;
+    this.recentChat = [];     // last few viewer lines, so commentary can react to the room
+    this.recentLines = [];    // last few things the AI said, so it does not repeat itself
     this.stats = { llm: 0, rules: 0, skipped: 0, llmErrors: 0 };
     this.available = this.mode === "agy" ? this.detectAgy() : false;
     console.log(`[ChatBrain] mode=${this.mode} model=${this.model} llmAvailable=${this.available}`);
@@ -45,6 +47,68 @@ export class ChatBrain {
     } catch {
       return false;
     }
+  }
+
+  /** Remember a viewer message so commentary can reference the room. */
+  noteChat(username, message) {
+    this.recentChat.push({ username, message: String(message).slice(0, 160), at: Date.now() });
+    if (this.recentChat.length > 12) this.recentChat.shift();
+  }
+
+  noteLine(text) {
+    this.recentLines.push(String(text).slice(0, 200));
+    if (this.recentLines.length > 6) this.recentLines.shift();
+  }
+
+  chatContext() {
+    const fresh = this.recentChat.filter((c) => Date.now() - c.at < 10 * 60000).slice(-6);
+    if (fresh.length === 0) return "Chat has been quiet.";
+    return "Recent chat: " + fresh.map((c) => `${c.username}: "${c.message}"`).join(" | ");
+  }
+
+  /**
+   * Write one line of live commentary about something that just happened in the colony.
+   * `event` is a short machine tag, `detail` is the concrete fact. Nothing is pre-written:
+   * the line is generated from the event, the live snapshot and the recent chat.
+   */
+  async commentary(event, detail, options = {}) {
+    const state = await this.snapshotSummary();
+    const avoid = this.recentLines.length ? `You recently said: ${this.recentLines.map((l) => `"${l}"`).join(" ")} Do not repeat those.` : "";
+    const prompt = [
+      PERSONA,
+      "",
+      `COLONY STATE: ${state}`,
+      this.chatContext(),
+      avoid,
+      "",
+      `Something just happened in your colony. Event: ${event}. Detail: ${detail}`,
+      options.askChat
+        ? "Say one line about it to your Twitch audience and invite them to weigh in, naturally, without sounding like a prompt."
+        : "Say one line about it to your Twitch audience.",
+      "Plain text, one or two sentences, under 200 characters. Do not restate the event tag.",
+    ].filter(Boolean).join("\n");
+
+    if (this.available && this.mode === "agy" && !this.inFlight) {
+      this.inFlight = true;
+      try {
+        const text = await this.askAgyRaw(prompt);
+        if (text) {
+          this.stats.llm++;
+          this.noteLine(text);
+          return text;
+        }
+      } catch (e) {
+        this.stats.llmErrors++;
+        console.warn(`[ChatBrain] commentary failed: ${e.message}`);
+      } finally {
+        this.inFlight = false;
+      }
+    }
+    this.stats.rules++;
+    // Fallback: state the fact plainly rather than a canned line.
+    const line = `${detail}`.slice(0, 200);
+    this.noteLine(line);
+    return line;
   }
 
   /** Decide whether a plain (non-command) message deserves a spoken reply. */
@@ -119,7 +183,17 @@ export class ChatBrain {
   }
 
   askAgy(username, message, state) {
-    const prompt = `${PERSONA}\n\nCOLONY STATE: ${state}\n\nViewer ${username} says in chat: "${message.slice(0, 300)}"\n\nReply to ${username} now (plain text, under 220 characters).`;
+    const prompt = [
+      PERSONA, "",
+      `COLONY STATE: ${state}`,
+      this.chatContext(), "",
+      `Viewer ${username} says in chat: "${message.slice(0, 300)}"`,
+      `Reply to ${username} now (plain text, under 220 characters).`,
+    ].join("\n");
+    return this.askAgyRaw(prompt);
+  }
+
+  askAgyRaw(prompt) {
     return new Promise((resolve, reject) => {
       const proc = spawn("agy", [
         "-p", prompt,

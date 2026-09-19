@@ -144,6 +144,7 @@ export class TwitchChatEngine {
 
     this.chatHistory.push(chatMsg);
     if (this.chatHistory.length > 50) this.chatHistory.shift();
+    if (this.chatBrain?.noteChat) this.chatBrain.noteChat(username, message);
 
     this.broadcastEvent({ type: "chat", ...chatMsg });
 
