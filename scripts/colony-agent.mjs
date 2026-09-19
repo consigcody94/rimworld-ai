@@ -292,11 +292,13 @@ export class ColonyAgent {
 
     await reportThought(`[Combat] Tactical defense active! Shooters positioned behind cover.`);
 
-    // 3. High-Frequency Tactical Loop (250ms ticks)
+    // 3. High-Frequency Tactical Loop
     let combatTicks = 0;
-    while (combatTicks < 40) {
+    let inFiringRange = false;
+
+    while (combatTicks < 200) {
       combatTicks++;
-      await new Promise((r) => setTimeout(r, 250));
+      await new Promise((r) => setTimeout(r, inFiringRange ? 250 : 500));
 
       const snap = await api.get("/snapshot");
       const currentHostiles = (snap.hostiles ?? []).filter((h) => !h.downed && !h.dead);
@@ -315,6 +317,23 @@ export class ColonyAgent {
         return distA - distB;
       });
       const targetHostile = currentHostiles[0];
+      const targetDist = Math.hypot((targetHostile.x ?? 0) - basePos.x, (targetHostile.z ?? 0) - basePos.z);
+
+      if (targetDist > 32) {
+        if (snap.speed !== 3) {
+          await api.post("/speed", { speed: 3 });
+        }
+        inFiringRange = false;
+        continue;
+      }
+
+      // Enemy entered firing range (<= 32 tiles)
+      if (!inFiringRange) {
+        inFiringRange = true;
+        await api.post("/speed", { speed: 1 });
+        console.log(`[TACTICAL ENGAGEMENT] Enemy within ${Math.round(targetDist)} tiles! Engaging at speed 1.`);
+        await reportThought(`[Combat] Hostile in range (${Math.round(targetDist)} tiles); volley fire engaged!`);
+      }
 
       // Order all capable shooters to focus volley fire
       const currentShooters = (snap.colonists ?? []).filter(isArmed);
@@ -336,6 +355,7 @@ export class ColonyAgent {
         await api.post("/draft", { pawn: s.id, drafted: false });
       } catch {}
     }
+    await api.post("/speed", { speed: this.speed });
 
     // Clean up allow tool after combat
     await this.manageSupplies();
@@ -366,7 +386,13 @@ export class ColonyAgent {
 
       if (this.allowMode === "home") {
         const res = await api.post("/allow", { home: true });
-        const vitals = ["MedicineIndustrial", "MealSurvivalPack", "ComponentIndustrial"];
+        const vitals = [
+          "MedicineIndustrial",
+          "MealSurvivalPack",
+          "ComponentIndustrial",
+          "WoodLog",
+          "Steel",
+        ];
         for (const def of vitals) {
           await api.post("/allow", { all: true, def });
         }

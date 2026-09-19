@@ -366,6 +366,13 @@ namespace RimWorldAIBridge
                 int n = 0;
                 foreach (var w in ws.Windows.ToList())
                 {
+                    if (w is RimWorld.Dialog_GiveName gn)
+                    {
+                        gn.OnAcceptKeyPressed();
+                        n++;
+                        if (!r.ArgBool("all")) break;
+                        continue;
+                    }
                     if (w.GetType().Name.StartsWith("Dialog") || w.GetType().Name.StartsWith("Page"))
                     {
                         ws.TryRemove(w); n++;
