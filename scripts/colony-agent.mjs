@@ -54,6 +54,17 @@ const api = {
   post: (path, body) => request("POST", path, body),
 };
 
+async function reportThought(text) {
+  try {
+    await fetch("http://localhost:18888/api/thought", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+      signal: AbortSignal.timeout(1000),
+    });
+  } catch {}
+}
+
 // ============================================================================
 // Research Progression Plan (from RimOp optimization guide)
 // ============================================================================
@@ -222,9 +233,11 @@ export class ColonyAgent {
           await api.post("/allow", { all: true, def });
         }
         console.log(`[ALLOW TOOL] Unallowed wild map drops; allowed ${res.matched ?? 0} home area items.`);
+        await reportThought(`[Allow Tool] Unallowed wild map drops; protected ${res.matched ?? 0} home supplies.`);
       } else if (this.allowMode === "all") {
         const res = await api.post("/allow", { all: true });
         console.log(`[ALLOW TOOL] Allowed all items across map (${res.changed ?? 0} changed).`);
+        await reportThought(`[Allow Tool] Allowed all items across the map.`);
       }
     } catch (e) {
       console.warn(`[ALLOW TOOL WARN] Could not manage supplies: ${e.message}`);
@@ -238,6 +251,7 @@ export class ColonyAgent {
         console.log(`[COMBAT] Drafted colonist ${c.name} (id ${c.id}).`);
       }
     }
+    await reportThought(`[Combat] Hostiles detected (${hostiles.length}); drafted shooters for defense.`);
   }
 
   async designateWoodChopping() {
@@ -249,6 +263,7 @@ export class ColonyAgent {
         const ids = mature.map((t) => t.id);
         await api.post("/designate", { type: "chop", things: ids });
         console.log(`[FORESTRY] Designated ${ids.length} mature trees for lumber.`);
+        await reportThought(`[Forestry] Designated ${ids.length} mature trees for lumber.`);
       }
     } catch (e) {
       console.warn(`[FORESTRY WARN] Could not designate trees: ${e.message}`);
@@ -266,6 +281,7 @@ export class ColonyAgent {
       try {
         await api.post("/research", { project: nextTech });
         console.log(`[RESEARCH] Set active research project to ${nextTech}.`);
+        await reportThought(`[Research] Activated new research project: ${nextTech}.`);
       } catch (e) {
         console.warn(`[RESEARCH WARN] Could not set project ${nextTech}: ${e.message}`);
       }

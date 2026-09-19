@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>RimWorld AI Stream Overlay</title>
+  <link rel="stylesheet" href="overlay.css">
+</head>
+<body>
+  <div class="overlay-container">
+    <!-- Top Telemetry Header -->
+    <header class="top-bar">
+      <div class="colony-info">
+        <span class="badge-ai">AI AUTONOMOUS</span>
+        <span class="colony-name" id="colony-name">NewDawn</span>
+        <span class="divider">/</span>
+        <span class="game-date" id="game-date">11th of Aprimay, 5500, 4h</span>
+        <span class="divider">/</span>
+        <span class="game-weather" id="game-weather">10C Clear</span>
+      </div>
+      <div class="storyteller-info">
+        <span class="storyteller" id="storyteller">Cassandra Classic</span>
+        <span class="badge-dev">NO DEV MODE</span>
+      </div>
+    </header>
+
+    <!-- Stockpile Resources Summary -->
+    <div class="resources-bar" id="resources-bar">
+      <div class="res-item"><span class="res-icon">🍲</span> <span id="res-food">34 Meals</span></div>
+      <div class="res-item"><span class="res-icon">🌿</span> <span id="res-med">30 Meds</span></div>
+      <div class="res-item"><span class="res-icon">🪵</span> <span id="res-wood">486 Wood</span></div>
+      <div class="res-item"><span class="res-icon">⚙️</span> <span id="res-steel">1145 Steel</span></div>
+      <div class="res-item"><span class="res-icon">🔋</span> <span id="res-comp">30 Comp</span></div>
+    </div>
+
+    <!-- Active Research Banner -->
+    <div class="research-banner" id="research-banner">
+      <div class="research-header">
+        <span class="label">CURRENT RESEARCH</span>
+        <span class="tech-name" id="research-name">Batteries (81%)</span>
+      </div>
+      <div class="progress-track">
+        <div class="progress-fill" id="research-fill" style="width: 81%;"></div>
+      </div>
+    </div>
+
+    <!-- Colonist Status Cards -->
+    <div class="colonists-panel" id="colonists-panel">
+      <!-- Injected dynamically via overlay.js -->
+    </div>
+
+    <!-- AI Agent Decisions & Thought Log -->
+    <div class="thought-log-container">
+      <div class="panel-header">AI AGENT REASONING</div>
+      <div class="thought-feed" id="thought-feed">
+        <div class="thought-item active">[Turn 5] Unallowed wild map drops; protected 121 home supplies.</div>
+        <div class="thought-item">[Agriculture] Sowed 24-cell Healroot patch for herbal medicine.</div>
+        <div class="thought-item">[Combat] Repelled manhunter attack with drafted volley; 100% tended.</div>
+      </div>
+    </div>
+
+    <!-- Live Twitch Chat Feed & Poll -->
+    <div class="chat-ticker-container">
+      <div class="panel-header">TWITCH VIEWER INTERACTIONS</div>
+      <div class="chat-feed" id="chat-feed">
+        <div class="chat-entry"><span class="badge-bot">BOT</span> Type !help, !status, !say &lt;msg&gt; or !vote &lt;tech&gt;</div>
+      </div>
+    </div>
+  </div>
+
+  <script src="overlay.js"></script>
+</body>
+</html>

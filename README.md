@@ -129,6 +129,37 @@ node scripts/colony-agent.mjs --turns=20 --step-ms=2500 --speed=3
 
 ---
 
+## Live Twitch Streaming Studio (`stream-app`)
+
+A built-in streaming application and broadcast studio located in `stream-app/` that manages live video broadcasting to Twitch, runs an interactive chat bot that executes in-game bridge commands, and serves a tactical HUD overlay.
+
+```bash
+# Launch the Stream Studio web dashboard
+node stream-app/server.mjs
+```
+
+- **Studio Mission Control**: Open `http://localhost:18888` to control broadcast start/stop, monitor real-time FPS and bitrate, test commands, and manage Twitch OAuth settings.
+- **Broadcast HUD Overlay**: Open or embed `http://localhost:18888/overlay` (transparent 1080p HUD showing live colonist vitals, AI reasoning decisions, stockpiled resources, and active viewer interactions).
+- **Hardware Acceleration**: Automatically utilizes Apple Silicon `h264_videotoolbox` encoder with zero CPU overhead for crisp 1080p60 broadcasting.
+
+### Interactive Viewer Commands
+
+Viewers watching on Twitch can interact with the live game and AI agent via chat:
+
+| Command | Description | Example Response |
+|---|---|---|
+| `!status` | Colony date, weather, speed, and difficulty | `[RimWorld AI] NewDawn \| Date: 11th of Aprimay, 5500, 4h (10C Clear) \| Speed: 0x \| DevMode: OFF` |
+| `!colonists` | Colonist vitals, moods, and active jobs | `[Colonists] Jenni (HP 100%, Mood 69%, Job: sleeping.) \| Callie (HP 100%, Mood 73%, Job: researching.)` |
+| `!pawn <name>` | Detailed pawn stats, skills, passions, health | `[Pawn Callie] Age 62 \| Skills: Plants: 5 *, Intellectual: 9 *, Social: 9 * \| Weapon: Bolt-action rifle` |
+| `!research` | Active technology and progression | `[Research] Active: battery (81%) \| Available: SolarPanels, Gunsmithing, Electricity` |
+| `!resources` | Counted stockpile resources | `[Stockpiled Resources] Steel: 1145, Wood: 486, Medicine: 30, Survival Meals: 34` |
+| `!say <message>` | Injects viewer message into the RimWorld game | `[Twitch] Viewer: Hello colonists! (Displayed live on game screen via POST /notify)` |
+| `!vote <choice>` | Casts viewer vote in strategic poll | `@Viewer Voted for "SolarPanels" (Total votes: 4)` |
+| `!poll` | Displays current viewer vote standings | `[Active Poll] solarpanels: 4 votes \| gunsmithing: 2 votes` |
+| `!help` | Lists available viewer commands | Lists all syntax options |
+
+---
+
 ## Colony Benchmark ("NewDawn")
 
 A continuous benchmark was run from day one under Cassandra Classic, Adventure Storyteller, without Dev Mode:

@@ -1,0 +1,13 @@
+{
+  "name": "rimworld-stream-app",
+  "version": "1.0.0",
+  "description": "Autonomous RimWorld AI Twitch Streaming Studio & Chat Interaction App",
+  "main": "server.mjs",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "keywords": ["rimworld", "ai", "twitch", "stream", "agent"],
+  "author": "consigcody94",
+  "license": "MIT"
+}
