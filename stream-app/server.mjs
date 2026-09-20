@@ -72,10 +72,15 @@ import { VoiceEngine } from "./voice.mjs";
 import { ChatBrain } from "./chat-brain.mjs";
 import { updateTwitchChannelInfo, resolveTwitchLogin, DEFAULT_STREAM_TITLE } from "./twitch-api.mjs";
 
+// Voice is off by default: the AI talks in Twitch chat. Set VOICE_ENGINE to vocello, neural or
+// say in .env to also speak the same lines aloud on stream.
 const voiceEngine = new VoiceEngine({
+  engine: env.VOICE_ENGINE || process.env.VOICE_ENGINE || "off",
+  enabled: (env.VOICE_ENGINE || process.env.VOICE_ENGINE || "off").toLowerCase() !== "off",
   voiceName: env.VOICE_NAME || process.env.VOICE_NAME || "com.apple.siri.natural.Nora",
   rate: 0.38,
 });
+console.log(`[Voice] ${voiceEngine.enabled ? `enabled (${voiceEngine.activeEngine()})` : "disabled; commentary goes to Twitch chat only"}.`);
 const chatBrain = new ChatBrain({ bridgeUrl: BRIDGE_URL });
 // No pre-written greetings: every spoken line is generated live from game events and chat.
 
@@ -222,7 +227,9 @@ const server = http.createServer(async (req, res) => {
     // ------------------------------------------------------------------------
     // API: Trigger AI Voice Commentary
     // ------------------------------------------------------------------------
-    // Live commentary: the agent reports WHAT HAPPENED, the brain writes the line, the voice speaks it.
+    // Live commentary. The agent reports WHAT HAPPENED, the brain writes the line, and the line
+    // goes to Twitch chat. Speech is opt-in (VOICE_ENGINE), because the AI talking in chat reads
+    // as a participant in the room while a synthetic voice reads as a narrator over the top.
     if (pathname === "/api/commentary" && req.method === "POST") {
       const body = await parseJsonBody(req);
       if (!body.event) return sendJson(res, 400, { ok: false, error: "event required" });
@@ -232,13 +239,24 @@ const server = http.createServer(async (req, res) => {
       } catch (e) {
         return sendJson(res, 200, { ok: false, error: e.message });
       }
-      if (!text) return sendJson(res, 200, { ok: true, spoken: false });
-      const accepted = voiceEngine.speak(text, { force: body.priority === "high", priority: body.priority });
+      if (!text) return sendJson(res, 200, { ok: true, posted: false });
+
+      const at = new Date().toLocaleTimeString();
       agentThoughts.push(text);
       if (agentThoughts.length > 20) agentThoughts.shift();
-      if (chatEngine.connected && body.toChat !== false) chatEngine.sendChat(text);
-      try { await fetch(`${BRIDGE_URL}/chat/push`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ user: "PersonaCore", text: text.slice(0, 140), color: "#7DD3FC" }), signal: AbortSignal.timeout(1500) }); } catch {}
-      return sendJson(res, 200, { ok: true, spoken: accepted, text });
+      chatEngine.chatHistory.push({ username: "PersonaCore", message: text, timestamp: at });
+      if (chatEngine.chatHistory.length > 50) chatEngine.chatHistory.shift();
+      chatEngine.broadcastEvent({ type: "reply", username: "PersonaCore", message: text, timestamp: at });
+      if (body.toChat !== false) chatEngine.sendChat(text);
+      try {
+        await fetch(`${BRIDGE_URL}/chat/push`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user: "PersonaCore", text: text.slice(0, 140), color: "#7DD3FC" }),
+          signal: AbortSignal.timeout(1500),
+        });
+      } catch {}
+      const spoken = voiceEngine.enabled ? voiceEngine.speak(text, { force: body.priority === "high", priority: body.priority }) : false;
+      return sendJson(res, 200, { ok: true, posted: true, spoken, text });
     }
 
     if (pathname === "/api/voice/speak" && req.method === "POST") {

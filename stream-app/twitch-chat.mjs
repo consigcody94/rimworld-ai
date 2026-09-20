@@ -177,7 +177,7 @@ export class TwitchChatEngine {
     if (this.chatHistory.length > 50) this.chatHistory.shift();
     this.broadcastEvent({ type: "reply", username: "PersonaCore", message: response, timestamp: new Date().toLocaleTimeString() });
     try { await this.callBridge("POST", "/chat/push", { user: "PersonaCore", text: response.slice(0, 140), color: "#7DD3FC" }); } catch {}
-    if (this.voiceEngine) this.voiceEngine.speak(response, { force: true });
+    if (this.voiceEngine?.enabled) this.voiceEngine.speak(response, { force: true });
   }
 
   async handleCommand(username, message) {
@@ -275,7 +275,7 @@ export class TwitchChatEngine {
           await this.callBridge("POST", "/notify", { text: displayMsg, type: "neutral" });
           this.broadcastEvent({ type: "notification", from: username, text: args });
           this.sendChat(`@${username} Your message has appeared on the RimWorld game screen!`);
-          if (this.voiceEngine) {
+          if (this.voiceEngine?.enabled) {
             this.voiceEngine.speak(`${username} says: ${args}`);
           }
           break;

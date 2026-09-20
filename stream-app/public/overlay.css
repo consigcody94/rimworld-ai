@@ -857,7 +857,9 @@ body {
    be sized on its own in OBS.
    ========================================================================== */
 
-body.is-solo .rail { top: var(--safe); }
+/* Lift the rails to the top edge only when the top bar is gone. With
+   ?parts=hud the top bar is still present, so the rails must stay below it. */
+body.is-solo:not(.solo-hud) .rail { top: var(--safe); }
 body.is-solo .card-voice,
 body.is-solo .card-poll,
 body.is-solo .card-research,

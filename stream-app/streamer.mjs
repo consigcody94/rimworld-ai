@@ -30,6 +30,22 @@ const AUDIO_BITRATE = "160k";
 const TWITCH_MAX_VIDEO_KBPS = 6000;
 const KEYFRAME_SECONDS = 2;
 
+/**
+ * How long the capture source may stay lost before the broadcast is cut.
+ *
+ * ffmpeg keeps encoding whatever the capture pipe last gave it, so losing the game window does
+ * not stop the RTMP push: it just turns the channel into dead air. On 2026-09-19 RimWorld exited
+ * and the encoder kept pushing a frozen frame to Twitch for about an hour. A window can be lost
+ * legitimately for a few seconds (fullscreen toggle, resize, space switch), so there is a grace
+ * period rather than an immediate cut. Set STREAM_WINDOW_LOST_GRACE_MS=0 to disable the watchdog.
+ */
+const WINDOW_LOST_GRACE_MS = (() => {
+  const raw = process.env.STREAM_WINDOW_LOST_GRACE_MS;
+  if (raw == null || raw === "") return 120000;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : 120000;
+})();
+
 /** "6000k" | "6000" | 6000 -> 6000 (kbps). Returns null when unparseable. */
 function parseKbps(value) {
   if (value == null) return null;
@@ -76,6 +92,7 @@ export class StreamEngine {
     this.restartCount = 0;
     this.restartTimer = null;
     this.lastStartArgs = null;   // { key, testFile } so a restart can replay it
+    this.windowLostTimer = null; // watchdog: cuts the broadcast if the window never comes back
 
     this.stats = {
       running: false,
@@ -87,6 +104,7 @@ export class StreamEngine {
       startedAt: null,
       error: null,
       captureState: "idle", // "capturing" | "window-lost" | "idle"
+      windowLostSince: null, // ms epoch the capture source went away, else null
       // Additive telemetry. Existing field names above are untouched because
       // server.mjs spreads this object straight into /api/stream/status.
       restartCount: 0,
@@ -350,16 +368,43 @@ export class StreamEngine {
   parseCaptureStatus(line) {
     if (!line) return;
     if (line.startsWith("READY") || line.startsWith("WINDOW REACQUIRED") || line.startsWith("WINDOW RESIZED")) {
+      this.clearWindowLostWatchdog();
       if (this.stats.captureState !== "capturing") {
         this.stats.captureState = "capturing";
         this.emitStats();
       }
-    } else if (line.startsWith("WINDOW LOST")) {
+    } else if (line.startsWith("WINDOW LOST") || line.startsWith("VIDEO STREAM STOPPED")) {
       if (this.stats.captureState !== "window-lost") {
         this.stats.captureState = "window-lost";
+        this.stats.windowLostSince = Date.now();
         this.emitStats();
       }
+      this.armWindowLostWatchdog();
     }
+  }
+
+  /** Start the dead-air countdown. Idempotent: an already-running timer is left alone. */
+  armWindowLostWatchdog() {
+    if (WINDOW_LOST_GRACE_MS <= 0 || this.windowLostTimer || !this.requested) return;
+    this.windowLostTimer = setTimeout(() => {
+      this.windowLostTimer = null;
+      if (this.stats.captureState !== "window-lost") return;
+      const grace = WINDOW_LOST_GRACE_MS >= 1000 ? `${Math.round(WINDOW_LOST_GRACE_MS / 1000)}s` : `${WINDOW_LOST_GRACE_MS}ms`;
+      const message = `capture source lost for ${grace}; stopping the broadcast rather than pushing dead air`;
+      console.error(`[StreamEngine] ${message}`);
+      this.stop();
+      this.stats.error = message;
+      this.emitStats();
+    }, WINDOW_LOST_GRACE_MS);
+    this.windowLostTimer.unref?.();
+  }
+
+  clearWindowLostWatchdog() {
+    if (this.windowLostTimer) {
+      clearTimeout(this.windowLostTimer);
+      this.windowLostTimer = null;
+    }
+    this.stats.windowLostSince = null;
   }
 
   scheduleRestart(reason) {
@@ -426,6 +471,7 @@ export class StreamEngine {
 
   stop() {
     this.requested = false;
+    this.clearWindowLostWatchdog();
     if (this.restartTimer) {
       clearTimeout(this.restartTimer);
       this.restartTimer = null;

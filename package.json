@@ -1,0 +1,12 @@
+{
+  "name": "rimworld-ai-bridge",
+  "private": true,
+  "type": "module",
+  "description": "Autonomous RimWorld colony agent and Twitch streaming studio for the RimWorld AI Bridge mod.",
+  "scripts": {
+    "test": "node --test scripts/ stream-app/",
+    "agent": "node scripts/colony-agent.mjs",
+    "studio": "node stream-app/server.mjs"
+  },
+  "engines": { "node": ">=18" }
+}

@@ -50,12 +50,16 @@ export class VoiceEngine {
     this.state = { speaking: false, synthesizing: false, engine: this.activeEngine(), queued: 0, lastText: "" };
     this.stats = { spoken: 0, cacheHits: 0, vocelloFailures: 0, fallbacks: 0 };
 
-    try { mkdirSync(this.cacheDir, { recursive: true }); } catch {}
-    this.pruneCache();
+    if (this.enabled) {
+      try { mkdirSync(this.cacheDir, { recursive: true }); } catch {}
+      this.pruneCache();
+    }
   }
 
   activeEngine() {
+    if (!this.enabled || this.engine === "off") return "off";
     if (this.engine === "vocello" && existsSync(this.vocelloBin)) return "vocello";
+    if (this.engine === "say") return "say";
     if (existsSync(SPEAK_NEURAL_BIN)) return "neural";
     return "say";
   }

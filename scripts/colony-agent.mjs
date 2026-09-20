@@ -127,6 +127,7 @@ export class ColonyAgent {
     this.foodEmergency = false;
     this.weaponRush = false;
     this.workPlanMode = null;
+    this.scheduleMode = "optimal";
     this.skillCache = new Map();
     this.stats = { turns: 0, combatTurns: 0, orders: 0, errors: 0 };
   }
@@ -370,6 +371,8 @@ export class ColonyAgent {
     }
     await this.place("sleepingspot", "SleepingSpot", b.x + 1, b.z - 1);
     await this.place("craftingspot", "CraftingSpot", b.x + 6, b.z + 2);
+    // A butcher spot is free and is the only way a hunted animal becomes food.
+    await this.place("butcherspot", "ButcherSpot", b.x + 6, b.z - 2);
     await this.manageWork(colonists);
     await this.manageWood(snap.resources ?? {});
     this.saveState(snap);
@@ -521,13 +524,48 @@ export class ColonyAgent {
         this.configured.add(c.id);
       }
 
+      // Hunger cancels recreation, and it has to be checked here, above every early return.
+      // A pawn put on the joy timetable by Rule 4 stays there until Rule 4's own exit branch
+      // clears it, and that branch sits at the bottom of this loop, past Rule 1's `continue`.
+      // So a pawn that grew hungry while in joy mode could never leave it: the food emergency
+      // below skips joy-mode pawns, and Rule 1 returned before the exit branch could run. It
+      // swam and slept through its own starvation while the agent narrated that food was the
+      // only priority. That is how the 2026-09-19 run lost its founder. Hunger wins.
+      if (this.joyMode.has(c.id) && food < 0.35) {
+        this.joyMode.delete(c.id);
+        await api.tryPost("/pawn/schedule", { pawn: c.id, preset: this.foodEmergency ? "work" : "optimal" });
+        await this.thought(`${c.name} is at ${Math.round(food * 100)}% food; recreation window cut short and back on the work timetable.`);
+      }
+
+      // Starving colonists do not get to sleep through the daylight hours. Once there is food
+      // again the normal timetable comes back.
+      if (this.foodEmergency && !this.joyMode.has(c.id) && this.scheduleMode !== "work") {
+        await api.tryPost("/pawn/schedule", { pawn: c.id, preset: "work" });
+      } else if (!this.foodEmergency && this.scheduleMode === "work" && !this.joyMode.has(c.id)) {
+        await api.tryPost("/pawn/schedule", { pawn: c.id, preset: "optimal" });
+      }
+
       // Rule 1: a hungry pawn eats before anything else. Never send a starving pawn to bed.
       if (food < 0.3) {
+        // If anything edible is reachable, eat it. The colony's own AI normally handles this,
+        // so this only fires in the case that actually kills colonists: food exists and the
+        // pawn is busy with something else.
+        if (await this.eatSomething(c)) continue;
         if ((snap.foodNutrition ?? 0) < 2) await this.forage(c);
-        if (food < 0.15 && this.every(`starving-${c.id}`, 40)) {
-          await this.thought(`${c.name} is starving (${Math.round(food * 100)}%). Food is the only priority.`);
-          await this.narrate(`starving-${c.id}`, "starvation risk", `${c.name} is at ${Math.round(food * 100)} percent food with only ${snap.foodNutrition ?? 0} nutrition stockpiled. Every other job is being dropped for food.`, 180000, { priority: "high", askChat: true });
-          await this.huntSmallGame(colonists, resources, true);
+        if (food < 0.15) {
+          // A rested pawn asleep or at recreation on 15% food is dying of a timetable, not of
+          // exhaustion. Interrupt it. A genuinely tired pawn (rest under 30%) is left alone.
+          const atLeisure = c.asleep || /joy|play|relax|watch|skygaze|meditat|social|swim/i.test(job);
+          if (atLeisure && rest > 0.3 && !c.drafted && this.every(`wake-${c.id}`, 20)) {
+            await api.tryPost("/job/cancel", { pawn: c.id });
+            this.stats.orders++;
+            await this.thought(`${c.name} was ${c.asleep ? "asleep" : job || "at leisure"} on ${Math.round(food * 100)}% food with ${Math.round(rest * 100)}% rest. Interrupted.`);
+          }
+          if (this.every(`starving-${c.id}`, 40)) {
+            await this.thought(`${c.name} is starving (${Math.round(food * 100)}%). Food is the only priority.`);
+            await this.narrate(`starving-${c.id}`, "starvation risk", `${c.name} is at ${Math.round(food * 100)} percent food with only ${snap.foodNutrition ?? 0} nutrition stockpiled. Every other job is being dropped for food.`, 180000, { priority: "high", askChat: true });
+            await this.huntSmallGame(colonists, resources, true);
+          }
         }
         continue;
       }
@@ -560,6 +598,43 @@ export class ColonyAgent {
     }
   }
 
+  /**
+   * Order a hungry pawn to eat the nearest edible item. Returns true if an eat order stuck.
+   *
+   * RimWorld's own pawn AI eats on its own when the timetable allows and the food is allowed
+   * and reachable, so this is a backstop, not the main path. It exists for the failure that
+   * actually kills colonists: there is food on the map and the pawn is doing something else.
+   */
+  async eatSomething(c) {
+    if (/ingest/i.test(c.job?.def ?? "")) return true;      // already eating; leave it alone
+    if (c.drafted || c.downed) return false;
+    if (!this.every(`eat-${c.id}`, 10)) return false;
+    const origin = this.base ?? c;
+    const r = 60;
+    try {
+      const res = await api.get(`/things?cat=Item&detail=1&rect=${origin.x - r},${origin.z - r},${r * 2 + 1},${r * 2 + 1}&limit=300`);
+      const edible = (res.things ?? [])
+        .filter((t) => (t.nutrition ?? 0) > 0 && t.humanEdible !== false && t.x != null)
+        .sort((a, b) => dist(a, c) - dist(b, c));
+      let target = edible.find((t) => !t.forbidden);
+      // Starving beats tidy. Crash debris, drop pods, corpses and anything outside the home area
+      // all arrive forbidden, so a hungry pawn can stand next to a survival meal and die of the
+      // forbidden flag. Unforbid the one item it is about to eat, and nothing else.
+      if (!target && edible.length > 0) {
+        target = edible[0];
+        await api.tryPost("/allow", { things: [target.id] });
+        await this.thought(`Unforbidding ${target.label ?? target.def} so ${c.name} can eat it.`);
+      }
+      if (!target) return false;
+      const edibleItem = target;
+      const ok = await api.tryPost("/job", { pawn: c.id, job: "Ingest", targetA: edibleItem.id, count: 1 });
+      if (!ok) return false;
+      this.stats.orders++;
+      await this.thought(`${c.name} sent to eat ${edibleItem.label ?? edibleItem.def} at ${edibleItem.x}, ${edibleItem.z}: ${Math.round((c.needs?.food ?? 0) * 100)}% food and it was busy with something else.`);
+      return true;
+    } catch { return false; }
+  }
+
   async nearestBed(c) {
     try {
       const beds = await api.get("/things?cat=Building&player=1&def=Bed");
@@ -589,19 +664,18 @@ export class ColonyAgent {
     // there is a buffer again. Restored as soon as the colony has a few days of food.
     if (starving && !this.foodEmergency) {
       this.foodEmergency = true;
+      this.scheduleMode = "work";
       await this.syncWorkPlan(colonists);
       await this.thought("Food emergency. Hunting, growing and cooking outrank every other job until we have a buffer.");
     } else if (this.foodEmergency && days > 2.5) {
       this.foodEmergency = false;
+      this.scheduleMode = "optimal";
       await this.syncWorkPlan(colonists);
       await this.thought("Food buffer restored. Back to the normal work plan.");
     }
-    // Campfire meals once a campfire exists and there is something to cook.
-    if ((raw > 0 || meat > 0) && this.every("food-bill", 25)) {
-      const camp = await api.get("/things?def=Campfire&player=1").catch(() => ({}));
-      for (const cf of camp.things ?? []) {
-        await api.tryPost("/bill", { thing: cf.id, recipe: "CookMealSimple", mode: "target", count: 8 });
-      }
+    // Make sure the butcher and cook bills exist as soon as there is anything to process.
+    if ((raw > 0 || meat > 0 || starving) && this.every("food-bill", 15)) {
+      await this.manageBills(resources);
     }
   }
 
@@ -730,6 +804,11 @@ export class ColonyAgent {
       const s = await api.get("/things/summary?cat=Building&player=1");
       built = new Set((s.groups ?? s.summary ?? []).map((g) => g.def));
     } catch {}
+
+    // A butcher spot costs nothing and unlocks the whole meat supply chain.
+    if (!built.has("ButcherSpot") && !built.has("TableButcher")) {
+      await this.place("butcherspot", "ButcherSpot", b.x + 6, b.z - 2);
+    }
 
     // Campfire first: warmth, light, cooking. 20 wood.
     if (wood >= 20 && !built.has("Campfire")) {
@@ -890,26 +969,47 @@ export class ColonyAgent {
     try {
       const spots = await api.get("/things?def=CraftingSpot&player=1");
       const spot = (spots.things ?? [])[0];
-      if (!spot) return;
-      const info = await api.get(`/thing/${spot.id}`).catch(() => ({}));
-      const bills = JSON.stringify(info.bills ?? []).toLowerCase();
-      let wood = resources.WoodLog ?? 0;
-
-      for (const w of ColonyAgent.WEAPON_RECIPES) {
-        if (this.placed.has(w.key) || bills.includes(w.label)) continue;
-        if (wood < w.wood) continue;
-        const r = await api.tryPost("/bill", { thing: spot.id, recipe: w.recipe, mode: "count", count: 1 });
-        if (r) {
-          this.placed.set(w.key, {});
-          wood -= w.wood;
-          await this.thought(`Queued a ${w.label} at the crafting spot: ${w.note}.`);
+      if (spot) {
+        const info = await api.get(`/thing/${spot.id}`).catch(() => ({}));
+        const bills = JSON.stringify(info.bills ?? []).toLowerCase();
+        let wood = resources.WoodLog ?? 0;
+        for (const w of ColonyAgent.WEAPON_RECIPES) {
+          if (this.placed.has(w.key) || bills.includes(w.label)) continue;
+          if (wood < w.wood) continue;
+          const r = await api.tryPost("/bill", { thing: spot.id, recipe: w.recipe, mode: "count", count: 1 });
+          if (r) {
+            this.placed.set(w.key, {});
+            wood -= w.wood;
+            await this.thought(`Queued a ${w.label} at the crafting spot: ${w.note}.`);
+          }
+        }
+        const leather = Object.entries(resources).filter(([k]) => k.startsWith("Leather_")).reduce((a, [, v]) => a + v, 0);
+        if (leather >= 60 && !bills.includes("tribal") && !this.placed.has("bill-tribalwear")) {
+          const r = await api.tryPost("/bill", { thing: spot.id, recipe: "Make_Apparel_TribalA", mode: "count", count: 1 });
+          if (r) { this.placed.set("bill-tribalwear", {}); await this.thought("Tribalwear queued. Clothes are temperature range and mood."); }
         }
       }
+    } catch {}
 
-      const leather = Object.entries(resources).filter(([k]) => k.startsWith("Leather_")).reduce((a, [, v]) => a + v, 0);
-      if (leather >= 60 && !bills.includes("tribal") && !this.placed.has("bill-tribalwear")) {
-        const r = await api.tryPost("/bill", { thing: spot.id, recipe: "Make_Apparel_TribalA", mode: "count", count: 1 });
-        if (r) { this.placed.set("bill-tribalwear", {}); await this.thought("Tribalwear queued. Clothes are temperature range and mood."); }
+    // Butchering is the step that turns a hunted animal into food. Without it, corpses rot
+    // where they fall and the colony starves next to its own kills.
+    try {
+      const butchers = await api.get("/things?def=ButcherSpot&player=1");
+      const tables = await api.get("/things?def=TableButcher&player=1").catch(() => ({}));
+      const bench = (tables.things ?? [])[0] ?? (butchers.things ?? [])[0];
+      if (bench && !this.placed.has("bill-butcher")) {
+        const r = await api.tryPost("/bill", { thing: bench.id, recipe: "ButcherCorpseFlesh", mode: "forever" });
+        if (r) { this.placed.set("bill-butcher", {}); await this.thought("Standing butcher bill set. Every kill now becomes meat and leather."); }
+      }
+    } catch {}
+
+    // Standing cook bill: keep a stock of simple meals rather than eating raw.
+    try {
+      const stoves = await api.get("/things?def=Campfire&player=1");
+      const stove = (stoves.things ?? [])[0];
+      if (stove && !this.placed.has("bill-cook")) {
+        const r = await api.tryPost("/bill", { thing: stove.id, recipe: "CookMealSimple", mode: "target", count: 12 });
+        if (r) { this.placed.set("bill-cook", {}); await this.thought("Standing cook bill set to keep a dozen simple meals on hand."); }
       }
     } catch {}
   }

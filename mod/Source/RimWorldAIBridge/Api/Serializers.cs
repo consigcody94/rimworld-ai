@@ -196,6 +196,13 @@ namespace RimWorldAIBridge
                 d["bills"] = bg.BillStack.Bills.Select(b => b.LabelCap + (b.suspended ? " (suspended)" : "")).ToList();
             }
             if (t.def.IsCorpse) d["corpse"] = true;
+            // Edibility, so an agent can find something for a starving pawn to eat without
+            // hardcoding a list of food defNames. Cheap: both are def flags, not stat lookups.
+            if (t.def.IsNutritionGivingIngestible)
+            {
+                d["nutrition"] = Math.Round(t.GetStatValue(StatDefOf.Nutrition), 2);
+                try { d["humanEdible"] = t.def.ingestible.HumanEdible; } catch { }
+            }
             if (detail)
             {
                 if (t.def.designationCategory != null) d["buildCategory"] = t.def.designationCategory.defName;

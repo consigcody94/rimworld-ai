@@ -154,7 +154,7 @@ namespace RimWorldAIBridge
                 return Bridge.Ok("pawn", Serializers.Pawn(p, true));
             });
 
-            Doc(s, "ANY", "/pawn/schedule", "Configure colonist 24h timetable. {pawn, preset:'optimal' | hours:['Sleep', ...]} Presets: optimal, joy, work.", r =>
+            Doc(s, "ANY", "/pawn/schedule", "Configure colonist 24h timetable. {pawn, preset:'optimal'|'work'|'joy'|'anything' | hours:['Sleep', ...]}. optimal: sleep 0-5, work 7-19, joy 20-21. work: crisis timetable, sleep 0-3 and 23, work 4-22. joy: all recreation. anything: unassigned.", r =>
             {
                 var map = Lookup.MapFrom(r); var p = Lookup.PawnFrom(r, map);
                 if (p.timetable == null) throw new BridgeException(p.LabelShort + " has no timetable.");
@@ -175,6 +175,22 @@ namespace RimWorldAIBridge
                     else if (preset.Equals("joy", StringComparison.OrdinalIgnoreCase))
                     {
                         for (int h = 0; h < 24; h++) p.timetable.SetAssignment(h, TimeAssignmentDefOf.Joy);
+                    }
+                    else if (preset.Equals("work", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // Crisis timetable: the minimum sleep a pawn can take without collapsing,
+                        // everything else on work. Use while starving or racing a deadline.
+                        for (int h = 0; h <= 3; h++) p.timetable.SetAssignment(h, TimeAssignmentDefOf.Sleep);
+                        for (int h = 4; h <= 22; h++) p.timetable.SetAssignment(h, TimeAssignmentDefOf.Work);
+                        p.timetable.SetAssignment(23, TimeAssignmentDefOf.Sleep);
+                    }
+                    else if (preset.Equals("anything", StringComparison.OrdinalIgnoreCase))
+                    {
+                        for (int h = 0; h < 24; h++) p.timetable.SetAssignment(h, TimeAssignmentDefOf.Anything);
+                    }
+                    else
+                    {
+                        throw new BridgeException("Unknown preset '" + preset + "'. Use optimal, work, joy or anything.");
                     }
                 }
                 else if (r.HasArg("hours"))

@@ -109,6 +109,20 @@ strategy manual.
 
 ---
 
+## Tests
+
+```bash
+npm test     # node --test over scripts/ and stream-app/
+```
+
+The suite needs no game and no bridge: `fetch` is stubbed and the assertions are about the orders
+the agent decides to send. It covers the two failure modes that have actually cost a run, both of
+which are regressions worth keeping closed: a pawn starving to death because hunger could not break
+the recreation timetable, and the stream engine pushing dead air to Twitch after the game window
+disappeared.
+
+---
+
 ## The stream studio
 
 ```bash
