@@ -51,22 +51,64 @@ func logErr(_ s: String) {
     _ = bytes.withUnsafeBytes { raw in write(2, raw.baseAddress, raw.count) }
 }
 
+/// Result of a frame write: it either went out, was dropped to protect the clock, or the pipe died.
+enum WriteOutcome { case ok, dropped, closed }
+
+/// Is there room in the pipe right now? Used to decide whether to start a frame at all.
+func pipeHasRoom(_ fd: Int32) -> Bool {
+    var pfd = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+    let n = poll(&pfd, 1, 0)
+    if n <= 0 { return false }
+    return (pfd.revents & Int16(POLLOUT)) != 0
+}
+
+/// Write a whole frame, or none of it.
+///
+/// This is the difference between our pipeline and a stuttering one. Raw video carries no
+/// timestamps, so ffmpeg derives presentation time from the frame count. If a slow encoder makes
+/// the write block, the capture falls behind the wall clock, every later frame is stamped early,
+/// and the RTMP session drifts behind real time by exactly the accumulated stall. Twitch buffers
+/// that and the viewer sees lag that never catches up. OBS drops whole frames to hold the clock.
+///
+/// Partial frames are NOT an option: raw video has no framing, so half a frame desynchronises
+/// the stream permanently ("packet size N < expected frame_size M"). So the decision to skip is
+/// made BEFORE the first byte goes out, and once started the write always runs to completion.
+func writeFrameOrDrop(_ fd: Int32, _ base: UnsafeRawPointer, _ count: Int) -> WriteOutcome {
+    if !pipeHasRoom(fd) { return .dropped }
+    var off = 0
+    while off < count {
+        let n = write(fd, base.advanced(by: off), count - off)
+        if n > 0 { off += n; continue }
+        if n < 0 {
+            let e = errno
+            if e == EINTR { continue }
+            if e == EAGAIN || e == EWOULDBLOCK {
+                // Committed to this frame now: wait for the reader rather than truncating it.
+                var pfd = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+                if poll(&pfd, 1, 2000) <= 0 { return .closed }
+                continue
+            }
+            return .closed
+        }
+        return .closed
+    }
+    return .ok
+}
+
 /// write(2) until everything is out. Returns false once the far end is gone.
-@inline(__always)
+@discardableResult
 func writeAll(_ fd: Int32, _ base: UnsafeRawPointer, _ count: Int) -> Bool {
     var off = 0
     while off < count {
         let n = write(fd, base.advanced(by: off), count - off)
-        if n > 0 {
-            off += n
-        } else if n < 0 {
+        if n > 0 { off += n; continue }
+        if n < 0 {
             let e = errno
             if e == EINTR { continue }
             if e == EAGAIN || e == EWOULDBLOCK { usleep(500); continue }
             return false
-        } else {
-            return false
         }
+        return false
     }
     return true
 }
@@ -79,6 +121,7 @@ final class FrameBus {
     private var back: UnsafeMutableRawPointer
     private var dirty = false
     private(set) var framesWritten: UInt64 = 0
+    private var droppedFrames: UInt64 = 0
 
     init() {
         front = UnsafeMutableRawPointer.allocate(byteCount: FRAME_BYTES, alignment: 64)
@@ -134,7 +177,19 @@ final class FrameBus {
         }
         let p = front
         lock.unlock()
-        guard writeAll(VIDEO_FD, p, FRAME_BYTES) else { return false }
+        // A third of a frame interval is the whole budget: past that the encoder is behind and
+        // holding this frame only makes the stream later.
+        switch writeFrameOrDrop(VIDEO_FD, p, FRAME_BYTES) {
+        case .ok:
+            break
+        case .dropped:
+            droppedFrames += 1
+            if droppedFrames % 30 == 1 {
+                FileHandle.standardError.write("ENCODER BEHIND: dropped \(droppedFrames) frame(s) to hold real time\n".data(using: .utf8)!)
+            }
+        case .closed:
+            return false
+        }
         framesWritten += 1
         return true
     }
@@ -536,7 +591,19 @@ if args.contains("--dims") {
 
 _ = NSApplication.shared
 
+/// Put a descriptor in non-blocking mode so a full pipe surfaces as EAGAIN instead of parking the
+/// pump thread. Without this the drop path below can never trigger.
+@discardableResult
+func setNonBlocking(_ fd: Int32) -> Bool {
+    let flags = fcntl(fd, F_GETFL, 0)
+    if flags < 0 { return false }
+    return fcntl(fd, F_SETFL, flags | O_NONBLOCK) >= 0
+}
+
 signal(SIGPIPE, SIG_IGN)
+// Non-blocking video pipe: a full pipe must surface as EAGAIN so the pump can drop the frame and
+// hold real time, rather than parking and letting the whole stream drift behind.
+setNonBlocking(VIDEO_FD)
 signal(SIGINT) { _ in exit(0) }
 signal(SIGTERM) { _ in exit(0) }
 

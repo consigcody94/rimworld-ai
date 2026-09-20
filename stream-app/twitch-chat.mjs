@@ -12,6 +12,7 @@ export class TwitchChatEngine {
     this.bridgeUrl = (options.bridgeUrl ?? "http://127.0.0.1:18800").replace(/\/$/, "");
     this.voiceEngine = options.voiceEngine ?? null;
     this.chatBrain = options.chatBrain ?? null;
+    this.seenChatters = new Set();
     this.ws = null;
     this.connected = false;
     this.isAuthenticated = false;
@@ -228,9 +229,18 @@ export class TwitchChatEngine {
 
     if (message.startsWith("!")) {
       await this.handleCommand(username, message);
-    } else {
-      await this.respondConversationally(username, message, false);
+      return;
     }
+
+    // First time we have seen this person in this session: greet them once, then treat them
+    // like anyone else. Everything PersonaCore says in chat is a response to a human.
+    if (!this.seenChatters.has(username.toLowerCase())) {
+      this.seenChatters.add(username.toLowerCase());
+      if (this.seenChatters.size > 500) this.seenChatters.clear();
+      await this.respondConversationally(username, message, true);
+      return;
+    }
+    await this.respondConversationally(username, message, false);
   }
 
   async respondConversationally(username, message, force) {

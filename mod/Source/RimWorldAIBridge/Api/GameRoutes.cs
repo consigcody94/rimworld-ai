@@ -37,7 +37,7 @@ namespace RimWorldAIBridge
                 return Bridge.Ok("loading", name);
             });
 
-            Doc(s, "ANY", "/game/new", "Start a new game without the UI. {scenario:NakedBrutality, storyteller:Cassandra, difficulty:Rough, mapSize:250, seed:'abc', planetCoverage:0.3, biome:TemperateForest, hilliness:LargeHills, permadeath:true, neolithic:true, curatePawn:true, colonyName}. Takes ~1-2 min; poll /status.", r =>
+            Doc(s, "ANY", "/game/new", "Start a new game without the UI. {scenario:NakedBrutality, storyteller:Cassandra, difficulty:Rough, mapSize:250, seed:'abc', planetCoverage:0.3, biome:TemperateForest, hilliness:LargeHills, permadeath:true, neolithic:true, curatePawn:true, season:Spring|Summer|Fall|Winter, colonyName}. Takes ~1-2 min; poll /status.", r =>
             {
                 if (Current.ProgramState == ProgramState.Playing) throw new BridgeException("A game is running. POST /game/menu first (or /game/save then /game/menu).", 409);
                 RestorePlayerTechLevel();
@@ -55,6 +55,13 @@ namespace RimWorldAIBridge
                 bool permadeath = r.ArgBool("permadeath", false);
                 bool neolithic = r.ArgBool("neolithic", false);
                 bool curatePawn = r.ArgBool("curatePawn", true);
+                // Starting season decides whether a colony with no food can find any. A naked
+                // start dropped into Decembary has no plant growth and almost no forage, which
+                // is a death sentence before the agent makes a single decision. Spring by
+                // default; pass season=Winter deliberately if you want that fight.
+                string seasonArg = r.Arg("season") ?? "Spring";
+                Season startSeason = Season.Spring;
+                Enum.TryParse<Season>(seasonArg, true, out startSeason);
 
                 LongEventHandler.QueueLongEvent(() =>
                 {
@@ -104,6 +111,7 @@ namespace RimWorldAIBridge
                     else Find.GameInitData.ChooseRandomStartingTile();
 
                     Find.GameInitData.mapSize = mapSize;
+                    Find.GameInitData.startingSeason = startSeason;
 
                     if (permadeath)
                     {
@@ -119,30 +127,48 @@ namespace RimWorldAIBridge
                     //    so the start stays a legitimate random roll, just a well chosen one.
                     if (curatePawn && Find.GameInitData.startingAndOptionalPawns != null && Find.GameInitData.startingAndOptionalPawns.Count > 0)
                     {
-                        // Roll repeatedly and KEEP the best pawn seen. The previous version compared
-                        // each roll against a best it had just raised to that same roll, and on
-                        // exhaustion kept whatever the final RandomizePawn produced, which could be
-                        // a disqualified pawn worse than hundreds already discarded.
-                        Pawn bestPawn = null;
+                        // Two-phase, and deliberately never holds a reference to a pawn:
+                        // RandomizePawn discards the previous one, so stashing it and assigning it
+                        // back later leaves the slot pointing at a dead object and NOBODY SPAWNS.
+                        //
+                        // Phase 1 samples the distribution to learn what a good roll looks like.
+                        // Phase 2 rolls until the pawn currently in the slot clears that bar, so
+                        // whatever is in the slot when the loop exits is always a live, scored pawn.
                         float best = float.MinValue;
-                        const int minRolls = 120, maxRolls = 600;
-                        const float goodEnough = 70f;
                         int rolls = 0;
-                        for (; rolls < maxRolls; rolls++)
+                        const int calibration = 60, maxRolls = 500;
+                        const float floorScore = 45f;
+
+                        for (int i = 0; i < calibration; i++, rolls++)
                         {
-                            var p = Find.GameInitData.startingAndOptionalPawns[0];
-                            float score = FounderScore(p);
-                            if (score > best) { best = score; bestPawn = p; }
-                            if (rolls >= minRolls && score >= goodEnough) break;
-                            if (rolls < maxRolls - 1) StartingPawnUtility.RandomizePawn(0);
+                            float sc = FounderScore(Find.GameInitData.startingAndOptionalPawns[0]);
+                            if (sc > best) best = sc;
+                            StartingPawnUtility.RandomizePawn(0);
                         }
-                        if (bestPawn != null && !ReferenceEquals(bestPawn, Find.GameInitData.startingAndOptionalPawns[0]))
+
+                        float bar = Mathf.Max(floorScore, best * 0.90f);
+                        float chosenScore = FounderScore(Find.GameInitData.startingAndOptionalPawns[0]);
+                        while (rolls < maxRolls && chosenScore < bar)
                         {
-                            Find.GameInitData.startingAndOptionalPawns[0] = bestPawn;
+                            StartingPawnUtility.RandomizePawn(0);
+                            rolls++;
+                            chosenScore = FounderScore(Find.GameInitData.startingAndOptionalPawns[0]);
+                            if (chosenScore > best) best = chosenScore;
                         }
-                        LastFounderScore = best;
+
+                        // Last resort: if the bar was never met, at least make sure the pawn in the
+                        // slot is not disqualified outright (negative score).
+                        int guard = 0;
+                        while (chosenScore < 0f && guard++ < 120)
+                        {
+                            StartingPawnUtility.RandomizePawn(0);
+                            rolls++;
+                            chosenScore = FounderScore(Find.GameInitData.startingAndOptionalPawns[0]);
+                        }
+
+                        LastFounderScore = chosenScore;
                         LastFounderRolls = rolls;
-                        Log.Message("[RimWorldAIBridge] founder curated from " + rolls + " rolls, best score " + best.ToString("F0") + ": " + (bestPawn?.LabelShort ?? "none"));
+                        Log.Message("[RimWorldAIBridge] founder chosen after " + rolls + " rolls, score " + chosenScore.ToString("F0") + " (bar " + bar.ToString("F0") + "): " + Find.GameInitData.startingAndOptionalPawns[0]?.LabelShort);
                     }
 
                     Find.Scenario.PreMapGenerate();
@@ -161,6 +187,7 @@ namespace RimWorldAIBridge
                     "permadeath", permadeath,
                     "neolithic", neolithic,
                     "mapSize", mapSize,
+                    "season", startSeason.ToString(),
                     "seed", seed,
                     "curatePawn", curatePawn
                 );

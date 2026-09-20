@@ -260,9 +260,13 @@ const server = http.createServer(async (req, res) => {
     // ------------------------------------------------------------------------
     // API: Trigger AI Voice Commentary
     // ------------------------------------------------------------------------
-    // Live commentary. The agent reports WHAT HAPPENED, the brain writes the line, and the line
-    // goes to Twitch chat. Speech is opt-in (VOICE_ENGINE), because the AI talking in chat reads
-    // as a participant in the room while a synthetic voice reads as a narrator over the top.
+    // Live commentary about the game.
+    //
+    // This deliberately does NOT post to Twitch chat. PersonaCore is a participant in the room,
+    // not a broadcaster talking over it: unprompted play-by-play from the streamer's own account
+    // reads as a bot flooding the channel. Commentary goes to the overlay and the in-game HUD,
+    // where a viewer can read it without it costing a chat line. Chat is reserved for replies to
+    // people, which is what /api/chat handles.
     if (pathname === "/api/commentary" && req.method === "POST") {
       const body = await parseJsonBody(req);
       const event = str(body.event, 80);
@@ -279,19 +283,13 @@ const server = http.createServer(async (req, res) => {
       const at = new Date().toLocaleTimeString();
       agentThoughts.push(text);
       if (agentThoughts.length > 20) agentThoughts.shift();
-      chatEngine.chatHistory.push({ username: "PersonaCore", message: text, timestamp: at });
-      if (chatEngine.chatHistory.length > 50) chatEngine.chatHistory.shift();
-      chatEngine.broadcastEvent({ type: "reply", username: "PersonaCore", message: text, timestamp: at });
-      if (body.toChat !== false) chatEngine.sendChat(text);
-      try {
-        await fetch(`${BRIDGE_URL}/chat/push`, {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ user: "PersonaCore", text: text.slice(0, 140), color: "#7DD3FC" }),
-          signal: AbortSignal.timeout(1500),
-        });
-      } catch {}
+      // Goes to the overlay's reasoning feed only. The in-game chat HUD mirrors the real Twitch
+      // channel, so nothing the AI thinks to itself belongs in it.
+      chatEngine.broadcastEvent({ type: "commentary", username: "PersonaCore", message: text, timestamp: at });
+      // Only an explicit toChat:true puts a line in the channel, and nothing sets it today.
+      if (body.toChat === true) chatEngine.sendChat(text);
       const spoken = voiceEngine.enabled ? voiceEngine.speak(text, { force: body.priority === "high", priority: body.priority }) : false;
-      return sendJson(res, 200, { ok: true, posted: true, spoken, text });
+      return sendJson(res, 200, { ok: true, posted: false, spoken, text });
     }
 
     if (pathname === "/api/voice/speak" && req.method === "POST") {

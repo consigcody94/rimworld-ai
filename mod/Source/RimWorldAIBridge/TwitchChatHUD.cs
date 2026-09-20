@@ -101,14 +101,14 @@ namespace RimWorldAIBridge
                 Prefs.Save();
             }
 
-            float w = 295f;
-            float h = 230f;
+            float w = 330f;
+            float h = 250f;
             float x = Screen.width - w - 8f;
             float y = 8f;
             Rect boxRect = new Rect(x, y, w, h);
 
             // Translucent glass panel background
-            Widgets.DrawBoxSolidWithOutline(boxRect, new Color(0.05f, 0.06f, 0.09f, 0.82f), new Color(0.25f, 0.45f, 0.75f, 0.6f), 1);
+            Widgets.DrawBoxSolidWithOutline(boxRect, new Color(0.04f, 0.05f, 0.08f, 0.93f), new Color(0.25f, 0.45f, 0.75f, 0.6f), 1);
 
             // Header banner
             Rect headerRect = new Rect(x, y, w, 22f);
@@ -127,6 +127,14 @@ namespace RimWorldAIBridge
             }
 
             float lineY = y + 26f;
+            if (display.Count == 0)
+            {
+                // Never show an empty box on stream. Tell viewers what they can type instead.
+                GUI.color = new Color(0.65f, 0.72f, 0.82f);
+                Widgets.Label(new Rect(x + 8f, lineY, w - 16f, 60f), "Chat with the AI:\n!ask <question>  ·  !status  ·  !colonists\n!research  ·  !resources  ·  !vote <choice>");
+                GUI.color = Color.white;
+                return;
+            }
             for (int i = 0; i < display.Count; i++)
             {
                 var msg = display[i];

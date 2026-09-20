@@ -18,17 +18,29 @@ namespace RimWorldAIBridge
     {
         public static Pawn Target = null;
         public static bool Enabled = true;
-        public static float Deadzone = 3.2f;
-        public static float SmoothSpeed = 4.2f;
-        public static float ZoomSmoothSpeed = 2.8f;
+        public static float Deadzone = 6.0f;
+        public static float SmoothSpeed = 2.2f;
+        public static float ZoomSmoothSpeed = 1.4f;
         public static float DesiredZoom = 21.0f;
         public static DateTime ManualOverrideUntil = DateTime.MinValue;
+        private static bool settled;
+        private static Vector3 anchor;
+        private static bool anchorValid;
+        private static int anchorTarget = -1;
+        /// <summary>How fast the trailing anchor follows the pawn. Lower is smoother.</summary>
+        public static float AnchorSpeed = 3.0f;
+        public static DateTime ZoomOverrideUntil = DateTime.MinValue;
 
         public static void SetTarget(Pawn p, float? zoom = null)
         {
+            if (!ReferenceEquals(Target, p)) { settled = false; anchorValid = false; }
             Target = p;
             Enabled = true;
-            if (zoom.HasValue) DesiredZoom = zoom.Value;
+            if (zoom.HasValue)
+            {
+                DesiredZoom = zoom.Value;
+                ZoomOverrideUntil = DateTime.UtcNow.AddSeconds(45);
+            }
         }
 
         public static void Update()
@@ -57,6 +69,13 @@ namespace RimWorldAIBridge
                 if (Target == null) return;
             }
 
+            // An explicit zoom from /camera or /camera/follow is honoured for a while instead of
+            // being overwritten by the context rule on the very next frame.
+            if (DateTime.UtcNow < ZoomOverrideUntil)
+            {
+                // keep DesiredZoom as set by the caller
+            }
+            else
             // Context-aware dynamic zoom
             if (Target.Drafted || (Target.CurJob != null && Target.CurJob.def.defName.IndexOf("Attack", StringComparison.OrdinalIgnoreCase) >= 0))
             {
@@ -78,18 +97,42 @@ namespace RimWorldAIBridge
             var cam = Find.CameraDriver;
             Vector3 camPos = cam.MapPosition.ToVector3Shifted();
             Vector3 pawnPos = Target.DrawPos;
-            float dist = Vector2.Distance(new Vector2(camPos.x, camPos.z), new Vector2(pawnPos.x, pawnPos.z));
+
+            // Stage 1: an anchor that trails the pawn. Seeded on first use and on target change so
+            // it never sweeps across the map from a stale position.
+            if (!anchorValid || anchorTarget != Target.thingIDNumber)
+            {
+                anchor = pawnPos;
+                anchorTarget = Target.thingIDNumber;
+                anchorValid = true;
+                settled = false;
+            }
+            anchor = Vector3.Lerp(anchor, pawnPos, Mathf.Clamp01(Time.deltaTime * AnchorSpeed));
+
+            float dist = Vector2.Distance(new Vector2(camPos.x, camPos.z), new Vector2(anchor.x, anchor.z));
+
+            // Inside the settled band, hold position. Chasing sub-deadzone drift every frame is
+            // exactly what reads as shaking on stream.
+            if (settled && dist < Deadzone * 1.8f)
+            {
+                if (Mathf.Abs(cam.RootSize - DesiredZoom) > 0.4f)
+                    cam.SetRootPosAndSize(camPos, Mathf.Lerp(cam.RootSize, DesiredZoom, Time.deltaTime * ZoomSmoothSpeed));
+                return;
+            }
 
             if (dist > Deadzone)
             {
-                Vector3 nextPos = Vector3.Lerp(camPos, pawnPos, Time.deltaTime * SmoothSpeed);
-                float nextZoom = Mathf.Lerp(cam.RootSize, DesiredZoom, Time.deltaTime * ZoomSmoothSpeed);
+                settled = false;
+                // Stage 2: the camera eases toward the anchor, never toward the raw pawn position.
+                Vector3 nextPos = Vector3.Lerp(camPos, anchor, Mathf.Clamp01(Time.deltaTime * SmoothSpeed));
+                float nextZoom = Mathf.Lerp(cam.RootSize, DesiredZoom, Mathf.Clamp01(Time.deltaTime * ZoomSmoothSpeed));
                 cam.SetRootPosAndSize(nextPos, nextZoom);
             }
-            else if (Mathf.Abs(cam.RootSize - DesiredZoom) > 0.25f)
+            else
             {
-                float nextZoom = Mathf.Lerp(cam.RootSize, DesiredZoom, Time.deltaTime * ZoomSmoothSpeed);
-                cam.SetRootPosAndSize(camPos, nextZoom);
+                settled = true;
+                if (Mathf.Abs(cam.RootSize - DesiredZoom) > 0.25f)
+                    cam.SetRootPosAndSize(camPos, Mathf.Lerp(cam.RootSize, DesiredZoom, Mathf.Clamp01(Time.deltaTime * ZoomSmoothSpeed)));
             }
         }
     }

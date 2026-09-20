@@ -67,9 +67,12 @@ export class StreamEngine {
     this.ingestServer = options.ingestServer ?? "rtmp://live.twitch.tv/app";
     // fps and bitrate are overridable by the caller, then by env, then default.
     // 30 is the default; 60 is supported (the gop follows fps automatically).
-    this.fps = options.fps ?? parseKbps(process.env.STREAM_FPS) ?? 30;
+    this.fps = options.fps ?? (parseInt(process.env.STREAM_FPS ?? "", 10) || 30);
+    // Default below the Twitch ceiling. On a busy machine a 6000k target is what pushes the
+    // encoder under 1.0x speed, and anything under real time becomes permanent viewer lag.
+    const DEFAULT_VIDEO_KBPS = 4500;
     const requestedKbps =
-      parseKbps(options.bitrate) ?? parseKbps(process.env.STREAM_BITRATE) ?? TWITCH_MAX_VIDEO_KBPS;
+      parseKbps(options.bitrate) ?? parseKbps(process.env.STREAM_BITRATE) ?? DEFAULT_VIDEO_KBPS;
     if (requestedKbps > TWITCH_MAX_VIDEO_KBPS) {
       console.warn(
         `[StreamEngine] Requested ${requestedKbps} kbps exceeds the Twitch non-partner ceiling; clamping to ${TWITCH_MAX_VIDEO_KBPS} kbps.`
@@ -186,7 +189,6 @@ export class StreamEngine {
       "-y",
       // ---- video input: raw BGRA from capture-window on stdin ----
       "-thread_queue_size", "512",
-      "-use_wallclock_as_timestamps", "1",
       "-f", "rawvideo",
       "-pixel_format", "bgra",
       "-video_size", `${width}x${height}`,
@@ -194,7 +196,6 @@ export class StreamEngine {
       "-i", "pipe:0",
       // ---- audio input: system audio from ScreenCaptureKit, never the microphone ----
       "-thread_queue_size", "512",
-      "-use_wallclock_as_timestamps", "1",
       "-f", "f32le",
       "-ar", String(AUDIO_RATE),
       "-ac", String(AUDIO_CHANNELS),
