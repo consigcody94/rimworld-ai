@@ -45,14 +45,22 @@ test("a hungry pawn is pulled out of the joy timetable", async () => {
   // Regression: Rule 4 put the pawn on a recreation schedule for a mood dip, then Rule 1's
   // early return made the exit branch unreachable. The pawn swam and slept at 0% food until it
   // died. Hunger must break joy mode before any early return in the needs loop.
+  //
+  // This test used to assert the pawn was moved onto a "work" timetable. That was wrong, and it
+  // cost a later run: a permanent Work schedule carries a high mental break risk, and a colonist
+  // forced onto one while starving broke down at 3% mood and then ignored every order, because a
+  // pawn in a mental break takes none. The correct destination is "anything", where the pawn
+  // works and still manages its own needs. What matters here is that joy mode ends.
   const { calls, restore } = stubBridge();
   try {
-    const a = agentFor({ foodEmergency: true, scheduleMode: "optimal" });
+    const a = agentFor({ foodEmergency: true });
     a.joyMode.set(1, 400);
     await a.manageNeeds([pawn({ needs: { food: 0.05, rest: 0.9, mood: 0.25, joy: 0.8 }, job: { def: "GoSwimming" } })],
       { foodNutrition: 0 }, {});
     assert.equal(a.joyMode.has(1), false, "joy mode should be cleared for a starving pawn");
-    assert.ok(scheduleSets(calls).includes("work"), `expected a work schedule, got ${scheduleSets(calls)}`);
+    const presets = scheduleSets(calls);
+    assert.ok(presets.includes("anything"), `expected the default anything timetable, got ${presets}`);
+    assert.ok(!presets.includes("work"), "a forced Work timetable is a mental break risk and must not be used");
   } finally { restore(); }
 });
 

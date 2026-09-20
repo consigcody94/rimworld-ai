@@ -382,7 +382,7 @@ export class ColonyAgent {
         // Nothing but calories. Cutting trees and harvesting berries are the same work type, so
         // leaving chop designations standing means the colonist fells a poplar while starving.
         await this.allowFood();
-        if (this.every("clear-chop", 20)) await this.clearWoodDesignations();
+        if (this.every("clear-chop", 6)) await this.clearWoodDesignations();
         if (this.every("food", 3)) await this.manageFood(colonists, snap, resources);
         // The bow is PART of solving hunger, not a project that waits until hunger is solved.
         // RimWorld will not let a pawn take a hunt job without a ranged weapon, so a colony with
@@ -592,6 +592,8 @@ export class ColonyAgent {
       const z = await api.tryPost("/zone", { type: "dumping", rect: { x: b.x + 12, z: b.z - 5, w: 4, h: 4 }, label: "Chunks" });
       if (z) this.zones.add("dumping");
     }
+    // Five of the most important early buildings cost nothing at all and take no work. There is
+    // never a resource excuse for skipping them, so they go down on the first turn.
     await this.place("sleepingspot", "SleepingSpot", b.x + 1, b.z - 1);
     await this.place("craftingspot", "CraftingSpot", b.x + 6, b.z + 2);
     // Arming the colony is the single highest-value thing in the first two days. Two founders
@@ -814,9 +816,8 @@ export class ColonyAgent {
       const job = c.job?.def ?? "";
 
       if (!this.configured.has(c.id)) {
-        await api.tryPost("/pawn/settings", { pawn: c.id, selfTend: true, medicalCare: "Best", hostility: "Attack" });
-        await api.tryPost("/pawn/schedule", { pawn: c.id, preset: "optimal" });
-        this.appliedSchedule.set(c.id, "optimal");
+        // Self-tend is not optional for a solo colony: without it one bleeding wound ends the run.
+        await api.tryPost("/pawn/settings", { pawn: c.id, selfTend: true, medicalCare: "Best", hostility: "Flee" });
         this.configured.add(c.id);
       }
 
@@ -829,20 +830,13 @@ export class ColonyAgent {
       // only priority. That is how the 2026-09-19 run lost its founder. Hunger wins.
       if (this.joyMode.has(c.id) && food < 0.35) {
         this.joyMode.delete(c.id);
-        await api.tryPost("/pawn/schedule", { pawn: c.id, preset: this.foodEmergency ? "work" : "optimal" });
+        await api.tryPost("/pawn/schedule", { pawn: c.id, preset: "anything" });
         await this.thought(`${c.name} is at ${Math.round(food * 100)}% food; recreation window cut short and back on the work timetable.`);
       }
 
-      // Starving colonists do not get to sleep through the daylight hours. Tracked per pawn
-      // against what was last applied, so the order is sent once per transition rather than
-      // never (the previous version compared two variables that always moved together).
-      if (!this.joyMode.has(c.id)) {
-        const want = this.foodEmergency ? "work" : "optimal";
-        if (this.appliedSchedule.get(c.id) !== want) {
-          await api.tryPost("/pawn/schedule", { pawn: c.id, preset: want });
-          this.appliedSchedule.set(c.id, want);
-        }
-      }
+      // The default Anything schedule is deliberately left in place. Pawns on it work and manage
+      // their own needs; a permanent Work timetable carries a high mental break risk, and forcing
+      // one onto a starving colonist is how a run ended with a pawn in psychosis at 3% mood.
 
       // Rule 0: bleeding out is faster than starving, so a serious injury is handled even when
       // the pawn is also hungry. The hunger branch below returns early, which used to skip this.
@@ -906,14 +900,12 @@ export class ColonyAgent {
       if (!this.joyMode.has(c.id) && mood < threshold + 0.02 && joy < 0.45 && food >= 0.4 && !this.inCombat) {
         this.joyMode.set(c.id, this.turn);
         await api.tryPost("/pawn/schedule", { pawn: c.id, preset: "joy" });
-        this.appliedSchedule.set(c.id, "joy");
         await this.thought(`${c.name} mood ${Math.round(mood * 100)}% at break threshold ${Math.round(threshold * 100)}%. Short recreation window.`);
         await this.narrate(`mood-${c.id}`, "mood crisis", `${c.name} mood ${Math.round(mood * 100)} percent against a break threshold of ${Math.round(threshold * 100)} percent, joy ${Math.round(joy * 100)} percent. Switching them to a recreation schedule.`, 240000, { askChat: true });
       } else if (this.joyMode.has(c.id) && (mood > threshold + 0.08 || this.turn - this.joyMode.get(c.id) > 45)) {
         this.joyMode.delete(c.id);
-        const back = this.foodEmergency ? "work" : "optimal";
-        await api.tryPost("/pawn/schedule", { pawn: c.id, preset: back });
-        this.appliedSchedule.set(c.id, back);
+        // Back to Anything, never to a forced Work timetable.
+        await api.tryPost("/pawn/schedule", { pawn: c.id, preset: "anything" });
       }
     }
   }
@@ -1037,7 +1029,8 @@ export class ColonyAgent {
 
   async forage(near) {
     if (!this.every("forage", 12)) return;
-    if ((await this.pendingDesignations("HarvestPlant")) > 12) return;
+    // Deliberately not gated on the HarvestPlant count: trees share that designation, so a board
+    // full of oaks used to look like a board full of food and suppressed foraging entirely.
     const origin = this.base ?? near;
     try {
       // Find the food plants by definition across the whole map and take the nearest ones. A
@@ -1105,6 +1098,9 @@ export class ColonyAgent {
   }
 
   async manageWood(resources) {
+    // Never put trees on the board while people are starving: they compete with berries for the
+    // same work type and the same designation, and trees usually win on count.
+    if (this.foodEmergency) return;
     const wood = resources.WoodLog ?? 0;
     if (wood >= 250) return;
     const pending = await this.pendingDesignations("CutPlant") + await this.pendingDesignations("HarvestPlant");
@@ -1355,12 +1351,19 @@ export class ColonyAgent {
    * Weapon recipes a neolithic colony can actually make at a crafting spot with no research,
    * cheapest and most useful first. A short bow beats a club: range decides fights.
    */
+  /**
+   * Weapons a colony can make at a free crafting spot with no research.
+   * A short bow needs Crafting 2 and gives 22.9 tiles of reach, which is what makes hunting
+   * possible at all. A club has no skill requirement, so it is the fallback for a pawn who
+   * cannot make the bow. Both beat bare fists, which do 4.1 DPS against a knife's 7.02.
+   */
   static WEAPON_RECIPES = [
-    { recipe: "Make_Bow_Short", key: "bill-bow", wood: 30, label: "short bow", note: "range beats everything early" },
-    { recipe: "Make_MeleeWeapon_Club", key: "bill-club", wood: 40, label: "club", note: "melee backup, and a second weapon for the next colonist" },
+    { recipe: "Make_Bow_Short", key: "bill-bow", wood: 30, minCrafting: 2, label: "short bow", note: "reach, and the only way to hunt at all" },
+    { recipe: "Make_MeleeWeapon_Club", key: "bill-club", wood: 40, minCrafting: 0, label: "club", note: "no skill needed, and far better than fists" },
   ];
 
   async manageBills(resources) {
+    const colonistSkills = [...this.skillCache.values()];
     try {
       const spots = await api.get("/things?def=CraftingSpot&player=1");
       const spot = (spots.things ?? [])[0];
@@ -1368,9 +1371,14 @@ export class ColonyAgent {
         const info = await api.get(`/thing/${spot.id}`).catch(() => ({}));
         const bills = JSON.stringify(info.bills ?? []).toLowerCase();
         let wood = resources.WoodLog ?? 0;
+        const crafting = Math.max(0, ...colonistSkills.map((sk) => {
+          const v = sk.Crafting;
+          return typeof v === "number" ? v : parseInt(String(v ?? "0"), 10) || 0;
+        }));
         for (const w of ColonyAgent.WEAPON_RECIPES) {
           if (this.placed.has(w.key) || bills.includes(w.label)) continue;
           if (wood < w.wood) continue;
+          if (crafting < w.minCrafting) continue;   // nobody here can make it
           const r = await api.tryPost("/bill", { thing: spot.id, recipe: w.recipe, mode: "count", count: 1 });
           if (r) {
             this.placed.set(w.key, {});
@@ -1487,39 +1495,39 @@ export class ColonyAgent {
    */
   workPlan(skills, colonists) {
     const lvl = (k) => { const v = skills[k]; return typeof v === "number" ? v : parseInt(String(v ?? "0"), 10) || 0; };
-    const small = colonists.length < 3;
+    const solo = colonists.length === 1;
+
+    // A pawn completes every job at one priority level before it looks at the next, and it
+    // ignores distance while doing so. Two work types sharing a priority is therefore a real
+    // decision, not a tie, and Hauling high enough to matter means the pawn carries every loose
+    // item on the map before it does anything useful.
     const base = {
-      Firefighter: 1, Patient: 1, Doctor: 1, PatientBedRest: 1, BasicWorker: 1,
-      PlantCutting: 1,
-      Growing: lvl("Plants") >= 3 ? 1 : 2,
+      Firefighter: 1, Patient: 1, PatientBedRest: 1, BasicWorker: 1,
+      Doctor: 1,
       Cooking: 2,
-      Construction: lvl("Construction") >= 3 ? 2 : 3,
-      Crafting: 2,
-      Hunting: lvl("Shooting") >= 3 ? 2 : 3,
-      Hauling: small ? 3 : 2,
-      Mining: small ? 4 : 3,
-      Research: lvl("Intellectual") >= 4 ? 3 : 4,
-      Tailoring: 3, Smithing: 3,
-      Warden: lvl("Social") >= 2 ? 2 : 3,
-      Cleaning: colonists.length >= 4 ? 4 : 0,
-      Art: 0,
-      Handling: colonists.length >= 3 ? 3 : 0,
+      Construction: 2,
+      Growing: 2,
+      PlantCutting: 3,          // below Growing: sowing and harvesting beat felling trees
+      Hunting: 3,
+      Crafting: 3,
+      Mining: 4,
+      Hauling: 3,               // never 1: it would eat the whole day
+      Research: 4,
+      Tailoring: 4, Smithing: 4, Warden: solo ? 0 : 2,
+      Art: 0, Cleaning: colonists.length >= 4 ? 4 : 0,
+      Handling: colonists.length >= 3 ? 4 : 0,
       Childcare: colonists.length >= 3 ? 3 : 0,
     };
+    if (lvl("Intellectual") >= 5) base.Research = 3;
 
     if (this.foodEmergency) {
-      // Nothing matters except calories.
-      //
-      // PlantCutting is the work type that harvests a designated berry bush, so it has to be 1.
-      // With it at 2, equal to Hauling, a starving colonist carried 68 wood to the stockpile
-      // while the berries five cells away stayed on the bush.
-      return { ...base, PlantCutting: 1, Growing: 1, Hunting: 1, Cooking: 1, Hauling: 3,
-               Construction: 4, Crafting: 4, Mining: 4, Research: 4, Tailoring: 4, Smithing: 4,
-               Art: 0, Cleaning: 0, Handling: 0, Smithing: 4 };
+      // Harvesting a berry bush is PlantCutting. It has to outrank every other plant job, and
+      // hauling has to drop, or a starving colonist stockpiles wood instead of eating.
+      return { ...base, PlantCutting: 1, Growing: 1, Cooking: 1, Hunting: 2, Hauling: 4,
+               Construction: 4, Crafting: 4, Mining: 4, Research: 4, Tailoring: 4, Smithing: 4 };
     }
     if (this.weaponRush) {
-      // Make a weapon, but keep gathering: a colony that stops eating to craft still dies.
-      return { ...base, Crafting: 1, PlantCutting: 1, Construction: 3, Mining: 4, Research: 4 };
+      return { ...base, Crafting: 1, Hauling: 3, Construction: 3, Mining: 4, Research: 4 };
     }
     return base;
   }
@@ -1563,20 +1571,32 @@ export class ColonyAgent {
    * both PlantCutting work, so while the colony is starving the trees have to come off the board
    * or the colonist will happily chop wood at two percent food.
    */
+  /**
+   * Take the trees off the work board so food is the only plant job left.
+   *
+   * This is the bug that starved three colonies. In RimWorld, chopping a tree and harvesting a
+   * berry bush both produce a `HarvestPlant` designation, and both are done under the
+   * `PlantCutting` work type. There is no separate "chop" designation to look for. The earlier
+   * version checked the `CutPlant` count, found zero, returned early and cancelled nothing,
+   * while a colonist at nine percent food worked through 194 wood of oak trees with berries four
+   * cells away.
+   *
+   * A pawn also completes every job at one priority before looking at the next and ignores
+   * distance while doing so, so leaving one tree designated is enough to lose the race.
+   */
   async clearWoodDesignations() {
-    const pending = await this.pendingDesignations("CutPlant");
-    if (pending === 0) return;
     try {
-      // Cancel the TREES specifically. A rectangle cancel wipes every designation inside it,
-      // including the hunts and harvests issued moments earlier, which left a starving colonist
-      // standing idle with nothing on the board while the log claimed it was hunting.
       const b = this.base;
       const res = await api.get(`/things?cat=Plant&detail=1&rect=${b.x - 60},${b.z - 60},121,121&limit=500`);
-      const trees = (res.things ?? []).filter((t) => t.tree && !(t.nutrition > 0));
+      // Trees, and anything else woody that is not itself food.
+      const trees = (res.things ?? []).filter((t) => t.tree && !((t.nutrition ?? 0) > 0));
       if (trees.length === 0) return;
       const r = await api.tryPost("/designate", { type: "cancel", things: trees.map((t) => t.id) });
       if (r && (r.designated ?? 0) > 0) {
-        this.log(`Cleared ${r.designated} tree designation(s) so food work comes first.`);
+        this.log(`Cleared ${r.designated} tree designation(s); food is now the only plant work.`);
+        // Cancelling can take food designations with it, so put those straight back.
+        this.lastRoutine.delete("forage");
+        await this.forage(this.base);
       }
     } catch {}
   }
