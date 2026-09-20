@@ -267,7 +267,7 @@ namespace RimWorldAIBridge
                 return r.Level * w + passion * (w >= 2f ? 1f : 0.5f);
             };
             s += sk(SkillDefOf.Plants, 3f);
-            s += sk(SkillDefOf.Construction, 2f);
+            s += sk(SkillDefOf.Construction, 3f);
             s += sk(SkillDefOf.Medicine, 2f);
             s += Mathf.Max(sk(SkillDefOf.Shooting, 2f), sk(SkillDefOf.Melee, 2f));
             s += sk(SkillDefOf.Cooking, 1f);
@@ -275,6 +275,13 @@ namespace RimWorldAIBridge
             s += sk(SkillDefOf.Intellectual, 1f);
             s += sk(SkillDefOf.Mining, 0.5f);
             if ((p.skills.GetSkill(SkillDefOf.Plants)?.Level ?? 0) < 5) s -= 25f;
+            // A founder who cannot build is a founder who never gets a roof. ConstructionSpeed is
+            // a flat 0.3 at skill 0 and ConstructSuccessChance is 0.75, so a whole house goes up
+            // at a third speed with one wall in four collapsing. The last roll this scoring
+            // approved had Plants 10 and Construction 0, and the house it was meant to build
+            // would have taken most of a season. Treat it the way Plants is treated: a hard floor,
+            // not a weight to be outvoted by a good farmer.
+            if ((p.skills.GetSkill(SkillDefOf.Construction)?.Level ?? 0) < 3) s -= 30f;
             if (age >= 20 && age <= 35) s += 5f;
 
             if (p.story?.traits != null)

@@ -309,6 +309,7 @@ namespace RimWorldAIBridge
                 {
                     { "x", c.x }, { "z", c.z },
                     { "terrain", map.terrainGrid.TerrainAt(c).defName },
+                    { "fertility", Math.Round(map.terrainGrid.TerrainAt(c).fertility, 2) },
                     { "fogged", map.fogGrid.IsFogged(c) },
                     { "roof", c.GetRoof(map)?.defName },
                     { "standable", c.Standable(map) },
@@ -322,7 +323,7 @@ namespace RimWorldAIBridge
                 return d;
             });
 
-            Doc(s, "GET", "/defs", "Search definitions. ?type=thing|building|item|plant|recipe|research|work|incident|terrain|storyteller|scenario|difficulty|biome|pawnkind &q=text &limit=50 &buildable=1", r =>
+            Doc(s, "GET", "/defs", "Search definitions. ?type=thing|building|item|plant|recipe|research|work|incident|terrain|storyteller|scenario|difficulty|biome|pawnkind &q=text &limit=50 &buildable=1. Also type=category (ThingCategoryDef, for storage filters) and type=filter (SpecialThingFilterDef, e.g. rotten and fresh toggles).", r =>
             {
                 string type = (r.Q("type") ?? "thing").ToLowerInvariant();
                 string q = r.Q("q") ?? "";
@@ -359,6 +360,23 @@ namespace RimWorldAIBridge
                             }).ToList();
                             break;
                         }
+                    case "category":
+                        results = DefDatabase<ThingCategoryDef>.AllDefsListForReading.Where(Match).Take(limit).Select(x => new Dictionary<string, object>
+                        {
+                            { "def", x.defName }, { "label", x.label },
+                            { "parent", x.parent?.defName },
+                            { "children", x.childCategories?.Select(c => c.defName).ToList() },
+                            { "things", x.childThingDefs?.Select(t => t.defName).Take(25).ToList() },
+                        }).ToList();
+                        break;
+                    case "filter":
+                        results = DefDatabase<SpecialThingFilterDef>.AllDefsListForReading.Where(Match).Take(limit).Select(x => new Dictionary<string, object>
+                        {
+                            { "def", x.defName }, { "label", x.label },
+                            { "allowedByDefault", x.allowedByDefault },
+                            { "parentCategory", x.parentCategory?.defName },
+                        }).ToList();
+                        break;
                     case "recipe":
                         results = DefDatabase<RecipeDef>.AllDefsListForReading.Where(Match).Take(limit).Select(x => new Dictionary<string, object> { { "def", x.defName }, { "label", x.label }, { "workbenches", x.AllRecipeUsers.Select(u => u.defName).Take(5).ToList() }, { "researched", x.AvailableNow }, { "products", x.products?.Select(p => p.thingDef.defName + "x" + p.count).ToList() }, { "ingredients", x.ingredients?.Select(i => i.Summary).ToList() } }).ToList();
                         break;
@@ -392,6 +410,53 @@ namespace RimWorldAIBridge
                     default: throw new BridgeException("Unknown def type '" + type + "'.");
                 }
                 return new Dictionary<string, object> { { "type", type }, { "count", results.Count }, { "defs", results } };
+            });
+
+            Doc(s, "GET", "/fertility", "Find ground worth farming. Scans a rect and returns the best blocks of sowable soil, ranked by average fertility, so crops go on rich soil rather than gravel. ?x=&z=&w=60&h=60&block=6&min=0.9&limit=8. Rich soil is 1.4, ordinary soil 1.0, gravel 0.7; below about 0.7 nothing worth eating will grow.", r =>
+            {
+                var map = Lookup.MapFrom(r);
+                int cx = r.QInt("x", map.Center.x), cz = r.QInt("z", map.Center.z);
+                int w = Math.Min(120, r.QInt("w", 60)), h = Math.Min(120, r.QInt("h", 60));
+                int block = Math.Max(2, Math.Min(12, r.QInt("block", 6)));
+                float min = r.ArgFloat("min", 0.9f);
+                int limit = Math.Min(30, r.QInt("limit", 8));
+
+                var results = new List<Dictionary<string, object>>();
+                int x0 = cx - w / 2, z0 = cz - h / 2;
+                for (int bx = x0; bx + block <= x0 + w; bx += Math.Max(1, block / 2))
+                {
+                    for (int bz = z0; bz + block <= z0 + h; bz += Math.Max(1, block / 2))
+                    {
+                        float sum = 0f; int cells = 0; bool blocked = false;
+                        for (int x = bx; x < bx + block && !blocked; x++)
+                        {
+                            for (int z = bz; z < bz + block; z++)
+                            {
+                                var c = new IntVec3(x, 0, z);
+                                if (!c.InBounds(map) || map.fogGrid.IsFogged(c)) { blocked = true; break; }
+                                var ter = map.terrainGrid.TerrainAt(c);
+                                // A growing zone cannot sit on a constructed floor or under a roof.
+                                if (ter.fertility <= 0f || c.GetRoof(map) != null) { blocked = true; break; }
+                                if (c.GetEdifice(map) != null) { blocked = true; break; }
+                                sum += ter.fertility; cells++;
+                            }
+                        }
+                        if (blocked || cells == 0) continue;
+                        float avg = sum / cells;
+                        if (avg < min) continue;
+                        results.Add(new Dictionary<string, object>
+                        {
+                            { "x", bx }, { "z", bz }, { "w", block }, { "h", block },
+                            { "fertility", Math.Round(avg, 2) },
+                            { "distanceFromCentre", (int)new IntVec3(bx + block / 2, 0, bz + block / 2).DistanceTo(new IntVec3(cx, 0, cz)) },
+                        });
+                    }
+                }
+                var best = results
+                    .OrderByDescending(d => (double)d["fertility"])
+                    .ThenBy(d => (int)d["distanceFromCentre"])
+                    .Take(limit).ToList();
+                return new Dictionary<string, object> { { "scanned", results.Count }, { "best", best } };
             });
 
             Doc(s, "GET", "/debug/failures", "Construction and build failures the bridge detected, which never appear in /events because the game shows them as floating text over the pawn rather than as messages. ?limit=50", r =>

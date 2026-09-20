@@ -11,7 +11,13 @@
  *   observe (/snapshot)  ->  react (combat, needs, letters)  ->  plan (periodic routines)  ->  present (camera, overlay, voice)
  *   Peacetime turns run every `stepMs` at game speed `speed`; combat turns run every `combatMs` at speed 1.
  *
- * CLI: node scripts/colony-agent.mjs [--speed=3] [--step-ms=700] [--combat-ms=250] [--turns=N] [--no-save] [--quiet]
+ *   Speed defaults to 1, not 3. A turn costs real wall-clock time: reading the colony, deciding,
+ *   and issuing orders. At 3x the game ran roughly three in-game hours per decision, so a raid,
+ *   a hunt gone wrong or a mental break played out entirely between two turns and the agent only
+ *   ever saw the aftermath. A colony was lost that way, one colonist dead and one kidnapped, with
+ *   no order issued during either event. Speed 1 keeps decisions inside the events they concern.
+ *
+ * CLI: node scripts/colony-agent.mjs [--speed=1] [--step-ms=700] [--combat-ms=250] [--turns=N] [--no-save] [--quiet]
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync } from "node:fs";
@@ -75,11 +81,45 @@ const dist = (a, b) => Math.hypot((a.x ?? 0) - (b.x ?? 0), (a.z ?? 0) - (b.z ?? 
 // ============================================================================
 
 /** Research order. The agent picks the first available project from this list, else the first available. */
+/**
+ * Research order, once survival is handled.
+ *
+ * Naked Brutality already starts with Electricity, Air conditioning and Nutrient paste, so this
+ * does not waste time re-earning them. The order is weapons, then clothes, then food that keeps,
+ * then power, because a colony dies to a raid or to winter long before it dies of having no
+ * solar panels.
+ */
 const TECH_ORDER = [
-  "ComplexFurniture", "Pemmican", "Stonecutting", "PassiveCooler", "Brewing", "TreeSowing",
-  "Smithing", "ComplexClothing", "Electricity", "Batteries", "SolarPanels", "MicroelectronicsBasics",
-  "Gunsmithing", "Machining", "Hydroponics", "MedicineProduction", "PackagedSurvivalMeal",
-  "Fabrication", "AdvancedFabrication", "Bionics", "Cryptosleep", "ShipBasics",
+  // Weapons and the bench that makes them.
+  "Smithing",              // unlocks the smithy: real melee weapons
+  "RecurveBow",            // better bow, still neolithic cheap
+  "Greatbow",
+  "Gunsmithing",           // firearms
+  "BlowbackOperation",
+  "PrecisionRifling",
+  // Clothes and the bench that makes them.
+  "ComplexClothing",
+  "Stonecutting",          // blocks for walls that do not burn
+  // Food that keeps.
+  "Pemmican",              // 70 day shelf life, no cooking skill needed
+  "PackagedSurvivalMeal",
+  "NutrientPaste",
+  // Power and the comforts it buys.
+  "Batteries",
+  "SolarPanels",
+  "WatermillGenerator",
+  "AirConditioning",       // a freezer ends food spoilage permanently
+  "PassiveCooler",
+  // Everything after this is a long game.
+  "ComplexFurniture",
+  "MicroelectronicsBasics",
+  "Machining",
+  "Hydroponics",
+  "MedicineProduction",
+  "Fabrication",
+  "AdvancedFabrication",
+  "Bionics",
+  "ShipBasics",
 ];
 
 /** Animals a lone bow hunter can take without real risk. Matched against the pawn kind label. */
@@ -108,7 +148,7 @@ const IDLE_JOBS = new Set(["Wait", "Wait_Wander", "Wait_MaintainPosture", "GotoW
 
 export class ColonyAgent {
   constructor(options = {}) {
-    this.speed = options.speed ?? 3;
+    this.speed = options.speed ?? 1;
     this.stepMs = options.stepMs ?? 700;
     this.combatMs = options.combatMs ?? 250;
     this.saveDaily = options.saveDaily ?? true;
@@ -383,8 +423,25 @@ export class ColonyAgent {
         // Nothing but calories. Cutting trees and harvesting berries are the same work type, so
         // leaving chop designations standing means the colonist fells a poplar while starving.
         await this.allowFood();
-        if (this.every("clear-chop", 6)) await this.clearWoodDesignations();
+        // Chopping a tree and picking a berry are the same designation and the same work type,
+        // so the colony can want one or the other but never both. That decision used to be made
+        // twice, by two routines on different clocks: one designated trees for the bow, the
+        // other cancelled them to protect the foraging, and with the colonist standing idle
+        // between them the pair thrashed every few seconds and issued hundreds of dead orders.
+        // It is one decision now, made here, from how much food is actually in store.
+        const starving = (this.foodDays ?? 0) < 1.0 || (this.hungriest ?? 1) < 0.35;
+        if (starving) {
+          if (this.every("clear-chop", 10)) await this.clearWoodDesignations();
+        } else if ((resources.WoodLog ?? 0) < 30 && this.every("wood-for-bow", 12)) {
+          await this.manageWood(resources);
+        }
         if (this.every("food", 3)) await this.manageFood(colonists, snap, resources);
+        // Crops are not a later phase, they are the way out of this one. A growing zone costs
+        // nothing, sowing is Growing work rather than PlantCutting so it never competes with
+        // foraging, and rice feeds a colonist from about day six. Every colony that starved here
+        // starved before day six.
+        if (this.every("farm", 20)) await this.manageFarms(colonists.length);
+        await this.manageSchedules(colonists);
         // The free structures are part of the food solution, not a distraction from it: the
         // crafting spot makes the bow, the butcher spot turns a kill into meat, and both cost
         // nothing and take almost no work.
@@ -397,8 +454,6 @@ export class ColonyAgent {
         if (colonists.every((c) => !c.weapon) && (resources.WoodLog ?? 0) >= 30) {
           if (this.every("weapons", 6)) await this.manageWeapons(colonists, resources);
           if (this.every("bills", 8)) await this.manageBills(resources);
-        } else if ((resources.WoodLog ?? 0) < 30 && this.every("wood-for-bow", 12)) {
-          await this.manageWood(resources);
         }
         break;
 
@@ -431,13 +486,14 @@ export class ColonyAgent {
         break;
 
       case "farm":
-        if (this.every("farm", 10)) await this.scaleFarms(colonists.length);
+        if (this.every("farm", 10)) await this.manageFarms(colonists.length);
         if (this.every("food", 8)) await this.manageFood(colonists, snap, resources);
         if (this.every("build", 15)) await this.manageBase(colonists, resources);
         break;
 
       case "grow":
       default:
+        await this.manageDefenses(resources);
         if (this.every("food", 8)) await this.manageFood(colonists, snap, resources);
         if (this.every("wood", 15)) await this.manageWood(resources);
         if (this.every("steel", 40)) await this.manageSteel(resources, colonists, day);
@@ -451,6 +507,8 @@ export class ColonyAgent {
     }
 
     // 3. Always on, cheap, and needed in every phase.
+    await this.manageCorpses();
+    await this.manageUpgrades();
     if (this.every("work", 30)) await this.manageWork(colonists);
     if (this.every("supplies", 40)) await this.manageSupplies(resources);
 
@@ -532,30 +590,37 @@ export class ColonyAgent {
     // is 45 wood and removes a mood penalty every single night; a hut is 85 wood and several
     // hours of construction. One run chopped 224 wood and still had no house, because the walls
     // were started before the cheap things that actually keep a colonist alive and sane.
+    this.foodDays = daysOfFood;
+    this.hungriest = hungriest;
     if (hungriest < 0.45 || daysOfFood < 1.5) {
       this.phaseReason = `Food first: the hungriest colonist is at ${Math.round(hungriest * 100)} percent with ${daysOfFood.toFixed(1)} days stored.`;
       return "food";
     }
+    // House, bed, food, table, in that order once there is a survival floor of food.
+    //
+    // A roof and a bed are worth more than anything else the colony can spend wood on: sleeping
+    // outdoors on the ground in the cold is Slept in the cold, Slept outside, Slept on ground and
+    // Uncomfortable all at once, about minus fifteen mood every night, against a break threshold
+    // of thirty five. A table is another three. Those thoughts are most of why colonies here have
+    // broken down, so they come before a weapon and before expanding the fields.
     if (!built.has("Campfire") || !this.hasAnyBed(built)) {
       this.phaseReason = !built.has("Campfire")
         ? "A campfire next: warmth, light and cooked meals for twenty wood."
-        : "A bed next: sleeping on the ground is a mood penalty paid every night, and it costs forty five wood.";
+        : "A bed next: sleeping on the ground costs mood every single night, and it is forty five wood.";
       return "basics";
     }
-    // A bow comes before the furniture, because on a naked start the bow IS the food supply.
-    // Berry bushes near a base are worth about a day of food between them; hunting is what
-    // actually feeds a colony, and hunting without a weapon is how founders get killed.
+    if (!this.placed.has("hut")) {
+      this.phaseReason = `Walls and a roof now, with ${wood} wood on hand. Sleeping outside is worth about minus fifteen mood a night on its own.`;
+      return "house";
+    }
+    if (!hasTable || !hasChair) {
+      this.phaseReason = "A table and a stool. Eating off the floor is a penalty paid at every single meal, for about fifty wood.";
+      return "comfort";
+    }
+    // Only once there is a roof: a bow matters, but not more than not freezing.
     if (unarmed === colonists.length && wood >= 30) {
       this.phaseReason = `Nothing here can hunt or fight. A short bow is thirty wood and it is the difference between foraging scraps and eating meat.`;
       return "weapon";
-    }
-    if (!hasTable || !hasChair) {
-      this.phaseReason = "A table and a stool. Eating off the floor is a penalty paid at every meal, for about fifty wood.";
-      return "comfort";
-    }
-    if (!this.placed.has("hut")) {
-      this.phaseReason = `Walls and a door now that the cheap things are done, with ${wood} wood on hand.`;
-      return "house";
     }
     if (daysOfFood < 6) {
       this.phaseReason = `Fields next: ${daysOfFood.toFixed(1)} days of food is not a buffer.`;
@@ -597,6 +662,60 @@ export class ColonyAgent {
     } catch {}
   }
 
+  /**
+   * Where to put the house, given where the good soil is.
+   *
+   * Anchoring on whatever cell the founder happened to be standing on put the base on top of the
+   * only fertile ground within twenty cells, and then the farm planner had to reject that ground
+   * precisely because the house was going to be built on it. The colony ended up walking twenty
+   * cells to sow every seed on soil no better than the soil it was standing on.
+   *
+   * So the soil is chosen first and the house is placed beside it: far enough east that the
+   * workshop wall never lands on a crop, close enough that sowing, weeding and hauling the
+   * harvest are all a few seconds' walk. A candidate is rejected if the ground the house itself
+   * would stand on is water, since nothing can be built there.
+   */
+  async chooseBase(founder) {
+    const margin = 30, size = this.mapSize ?? 250, max = size - margin;
+    const clamp = (v) => Math.round(Math.min(max, Math.max(margin, v)));
+    const fallback = { x: clamp(founder.x), z: clamp(founder.z) };
+
+    let best = null;
+    try {
+      const scan = await api.get(`/fertility?x=${Math.round(founder.x)}&z=${Math.round(founder.z)}&w=56&h=56&block=7&min=0.95&limit=30`);
+      const near = (scan.best ?? []).filter((c) => c.distanceFromCentre <= 26);
+      for (const soil of near) {
+        // House core sits east of the field, with the workshop's west wall clear of the last row.
+        const cand = { x: clamp(soil.x + 19), z: clamp(soil.z + 3) };
+        if (dist(cand, founder) > 30) continue;
+        if (await this.buildableGround(cand)) { best = { cand, soil }; break; }
+      }
+    } catch {}
+
+    if (!best) {
+      this.log("No fertile block close enough to build beside; anchoring on the founder.");
+      return fallback;
+    }
+    this.log(`Base at (${best.cand.x}, ${best.cand.z}), ${best.soil.distanceFromCentre} cells from the founder, with ${best.soil.fertility} fertility soil starting ${best.cand.x - best.soil.x - 7} cells west of the workshop wall.`);
+    return best.cand;
+  }
+
+  /** Would the house stand up here? Samples the footprint for water, which nothing builds on. */
+  async buildableGround(b) {
+    const samples = [[0, 0], [-8, 0], [14, 0], [0, -8], [0, 8], [-8, -8], [14, 8], [0, 20]];
+    try {
+      const cells = await Promise.all(samples.map(([dx, dz]) =>
+        api.get(`/cell?x=${b.x + dx}&z=${b.z + dz}`).catch(() => null)));
+      let bad = 0;
+      for (const c of cells) {
+        if (!c) { bad++; continue; }
+        const terrain = String(c.terrain ?? "");
+        if (/Water|Marsh|Lake|Ice/i.test(terrain)) bad++;
+      }
+      return bad <= 1;
+    } catch { return true; }
+  }
+
   async foundColony(snap, colonists) {
     try {
       const m = await api.get("/map");
@@ -615,13 +734,9 @@ export class ColonyAgent {
       return;
     }
 
-    // Fresh colony: anchor on the founder, but never within 30 cells of a map edge.
+    // Fresh colony: put the house beside the best farmland, not on top of it.
     const founder = colonists[0];
-    const margin = 30, max = (this.mapSize ?? 250) - margin;
-    this.base = {
-      x: Math.round(Math.min(max, Math.max(margin, founder.x))),
-      z: Math.round(Math.min(max, Math.max(margin, founder.z))),
-    };
+    this.base = await this.chooseBase(founder);
     const b = this.base;
     this.log(`Founding colony at (${b.x}, ${b.z}) with ${colonists.map((c) => c.name).join(", ")}.`);
     await this.thought(`Founded ${snap.colonyName ?? "the colony"} at (${b.x}, ${b.z}). Founder: ${founder.name}.`);
@@ -636,30 +751,35 @@ export class ColonyAgent {
     const home = await api.tryPost("/area/home", { rect: { x: b.x - 16, z: b.z - 16, w: 33, h: 33 }, add: true });
     this.log(`Home area: ${home ? JSON.stringify(home).slice(0, 120) : "failed"}`);
     await api.tryPost("/allow", { home: true });
+    // The outdoor stockpile is a staging area only: everything moves indoors to the warehouse as
+    // soon as that room stands. Goods left in the weather deteriorate, and a colonist fetching
+    // steel from across the map loses an hour to it.
     if (!this.zones.has("stockpile")) {
-      const z = await api.tryPost("/zone", { type: "stockpile", rect: { x: b.x + 5, z: b.z - 5, w: 6, h: 5 }, priority: "Preferred", label: "Main stockpile" });
+      const z = await api.tryPost("/zone", { type: "stockpile", rect: { x: b.x - 2, z: b.z - 7, w: 5, h: 3 }, priority: "Normal", label: "Staging" });
       if (z) this.zones.add("stockpile");
     }
+    // The sorted pits (human, insect, rubble) and the cold room come from manageStorage, which
+    // waits until their rooms exist. This one catches anything that dies before then.
     if (!this.zones.has("dumping")) {
-      const z = await api.tryPost("/zone", { type: "dumping", rect: { x: b.x + 12, z: b.z - 5, w: 4, h: 4 }, label: "Chunks" });
-      if (z) this.zones.add("dumping");
+      const z = await api.tryPost("/zone", { type: "dumping", rect: { x: b.x - 32, z: b.z - 30, w: 5, h: 5 }, label: "Far pit" });
+      if (z) {
+        this.zones.add("dumping");
+        await this.thought("Far pit placed thirty cells out: a rotting corpse in sight is minus eighteen mood, every time anyone walks past it.");
+      }
     }
     // Five of the most important early buildings cost nothing at all and take no work. There is
     // never a resource excuse for skipping them, so they go down on the first turn.
-    await this.place("sleepingspot", "SleepingSpot", b.x + 1, b.z - 1);
-    await this.place("craftingspot", "CraftingSpot", b.x + 6, b.z + 2);
+    await this.place("sleepingspot", "SleepingSpot", b.x - 1, b.z - 1);
+    await this.place("craftingspot", "CraftingSpot", b.x - 6, b.z + 1);
     // Rice, immediately. A growing zone costs nothing, sowing is Growing work rather than
     // PlantCutting so it does not compete with foraging, and 25 tiles feeds one colonist
     // indefinitely from about day six. Every colony that starved did so before day six.
-    if (!this.zones.has("rice")) {
-      const z = await api.tryPost("/zone", { type: "growing", rect: { x: b.x - 8, z: b.z + 5, w: 6, h: 5 }, plant: "Plant_Rice", label: "Rice" });
-      if (z) { this.zones.add("rice"); await this.thought("Rice sown on day one: thirty tiles, ready in about five and a half days."); }
-    }
+    await this.manageFarms(colonists.length);
     // Arming the colony is the single highest-value thing in the first two days. Two founders
     // have now been lost to a drifter while the colony had hundreds of wood and no weapon.
     this.weaponRush = true;
     // A butcher spot is free and is the only way a hunted animal becomes food.
-    await this.place("butcherspot", "ButcherSpot", b.x + 6, b.z - 2);
+    await this.place("butcherspot", "ButcherSpot", b.x + 6, b.z + 2);
     await this.manageWork(colonists);
     await this.manageWood(snap.resources ?? {});
     this.saveState(snap);
@@ -1095,16 +1215,23 @@ export class ColonyAgent {
       // Find the food plants by definition across the whole map and take the nearest ones. A
       // rectangle around the base only catches what happens to be inside it: on one map that was
       // a single bush while a hundred stood a short walk away, and the founder starved.
-      const defs = ["Plant_Berry", "Plant_Agave", "Plant_Bush"];
+      // Only plants whose harvest is actually food. "Plant_Bush" was in this list and is not: it
+      // is the ordinary decorative bush, there are four hundred of them on a temperate map, and
+      // they are always the nearest thing to the base. The colony spent its first days cutting
+      // them for nothing while the berry bushes stood untouched.
+      const defs = ["Plant_Berry", "Plant_Berry_Leafless", "Plant_Strawberry_Wild",
+                    "Plant_Agave", "Plant_Nutrifungus", "Glowstool", "Agarilux"];
       const results = await Promise.all(defs.map((d) =>
         api.get(`/things?def=${d}&detail=1&limit=400`).catch(() => ({}))));
       const bushes = results
         .flatMap((r) => r.things ?? [])
-        .filter((t) => (t.nutrition ?? 0) > 0 && t.harvestable !== false && t.x != null)
+        // A wild berry bush yields nothing worth the walk until it is grown. Below about a third
+        // grown RimWorld will not harvest it at all, and the job is cancelled on arrival.
+        .filter((t) => t.x != null && (t.growth ?? 1) >= 0.32)
         .map((t) => ({ ...t, d: dist(t, origin) }))
         .sort((a, b) => a.d - b.d);
       if (bushes.length === 0) {
-        this.log("No forageable food plants found anywhere on the map.");
+        this.log(`No grown food plants on the map yet (${results.flatMap((r) => r.things ?? []).length} still growing).`);
         return;
       }
       const take = bushes.slice(0, 25);
@@ -1199,14 +1326,27 @@ export class ColonyAgent {
   }
 
   /** Exactly what the next build step costs, so the colony never cuts wood it has no use for. */
+  /**
+   * How much wood the colony should be holding, given what it has not built yet.
+   *
+   * These are the real prices, counted off the plan rather than guessed: a wall is five wood and
+   * a door is twenty five, so the great hall with its four doors, one per adjoining room, is two
+   * hundred. The old target stopped at a hundred and fifty for "walls and a door", which is the
+   * price of a hut and not of a house, so the colony stopped chopping while still short of its
+   * first room and stood around with the blueprints unpaid for.
+   */
   woodNeeded(resources) {
     const built = this.builtDefs ?? new Set();
     if (!built.has("Campfire")) { this.woodReason = "a campfire"; return 20; }
     if (!this.hasAnyBed(built)) { this.woodReason = "a bed"; return 45; }
-    if (!built.has("Table1x2c") && !built.has("Table2x2c")) { this.woodReason = "a table and a stool"; return 55; }
-    if (!this.placed.has("hut")) { this.woodReason = "walls and a door"; return 150; }
-    this.woodReason = "a reserve for repairs and furniture";
-    return 200;
+    if (!this.placed.has("room-hall")) { this.woodReason = "the great hall: twenty walls and four doors"; return 215; }
+    if (!this.placed.has("room-bed1")) { this.woodReason = "the first bedroom"; return 160; }
+    if (!this.placed.has("room-warehouse")) { this.woodReason = "the warehouse"; return 160; }
+    if (!this.placed.has("room-kitchen")) { this.woodReason = "the kitchen"; return 160; }
+    if (!this.placed.has("room-freezer")) { this.woodReason = "the cold room"; return 140; }
+    if (!this.placed.has("room-workshop")) { this.woodReason = "the workshop"; return 140; }
+    this.woodReason = "the next bedroom, furniture and repairs";
+    return 220;
   }
 
   async manageSteel(resources, colonists = [], day = 1) {
@@ -1311,6 +1451,256 @@ export class ColonyAgent {
     } catch { return false; }
   }
 
+  /**
+   * The house, as a plan rather than as a pile of walls.
+   *
+   * A single 7x7 hut was never a home. Everything happened in one room: the cook stood over the
+   * campfire beside the bed, raw meat sat next to the table, and the first corpse hauled indoors
+   * cost every colonist mood for days. RimWorld rewards separation directly, through room
+   * ownership, room cleanliness, room impressiveness and temperature, so the base is laid out as
+   * named rooms with one purpose each and a door of their own.
+   *
+   * Everything shares a wall with its neighbour, which is both cheaper and warmer:
+   *
+   *                      bed7 | bed8          (bands grow north as the colony grows)
+   *                      bed5 | bed6
+   *                  hospital | research
+   *                      bed3 | bed4
+   *                      bed1 | bed2
+   *     workshop --  great hall  -- kitchen -- freezer
+   *                    warehouse                          prison (detached, south east)
+   *
+   * The great hall is the hub: every adjoining room opens off it, so a colonist crosses one room
+   * to reach any other and never walks outside in a toxic fallout or a cold snap. The corridor
+   * running north is one cell wide between the facing bedroom walls, which costs no walls of its
+   * own; only its north cap is placed, and as a door, so the next pair of bedrooms can extend
+   * through it without tearing anything down.
+   *
+   * Rects are outer, walls included, so neighbours overlap on exactly the wall they share.
+   */
+  roomPlan(population = 1) {
+    const b = this.base;
+    const R = (key, label, purpose, x0, z0, x1, z1, doors, opts = {}) => ({
+      key, label, purpose,
+      x0: b.x + x0, z0: b.z + z0, x1: b.x + x1, z1: b.z + z1,
+      doors: doors.map(([dx, dz]) => ({ x: b.x + dx, z: b.z + dz })),
+      ...opts,
+    });
+
+    const rooms = [
+      // The hub. Four doors, one per adjoining room, built in from the start so no wall ever has
+      // to be torn out to open a way through.
+      R("hall", "Great hall", "dining and recreation", -3, -3, 3, 3,
+        [[0, -3], [0, 3], [3, 0], [-3, 0]], { first: true }),
+
+      // The founder stops sleeping in the dining room. A 4x4 bedroom is large enough to stop
+      // counting as cramped, and an owned bedroom is worth real mood every single night.
+      R("bed1", "Bedroom 1", "sleeping", -6, 3, -1, 8, [[-1, 5]], { bedroom: true, cap: [0, 8] }),
+
+      // Goods and supplies out of the weather, one room from the front door.
+      R("warehouse", "Warehouse", "goods, supplies, materials", -3, -9, 3, -3, [[0, -9]]),
+
+      // Cooking away from the beds: a kitchen's cleanliness decides food poisoning chance.
+      R("kitchen", "Kitchen", "stove and butcher table", 3, -3, 9, 3, [[9, 0]]),
+
+      // The cold room. One door only, opening into the kitchen, so the cold stays in.
+      R("freezer", "Cold room", "meals, raw food, fresh carcasses", 9, -3, 15, 3, [], { freezer: true }),
+
+      R("workshop", "Workshop", "crafting, smithing, tailoring", -9, -3, -3, 3, [[-9, 0]]),
+
+      R("bed2", "Bedroom 2", "sleeping", 1, 3, 6, 8, [[1, 5]], { bedroom: true, cap: [0, 8] }),
+      R("bed3", "Bedroom 3", "sleeping", -6, 8, -1, 13, [[-1, 10]], { bedroom: true, cap: [0, 13] }),
+      R("bed4", "Bedroom 4", "sleeping", 1, 8, 6, 13, [[1, 10]], { bedroom: true, cap: [0, 13] }),
+
+      R("hospital", "Hospital", "medical beds", -6, 13, -1, 18, [[-1, 15]], { cap: [0, 18] }),
+      R("research", "Research room", "research bench", 1, 13, 6, 18, [[1, 15]], { cap: [0, 18] }),
+
+      R("bed5", "Bedroom 5", "sleeping", -6, 18, -1, 23, [[-1, 20]], { bedroom: true, cap: [0, 23] }),
+      R("bed6", "Bedroom 6", "sleeping", 1, 18, 6, 23, [[1, 20]], { bedroom: true, cap: [0, 23] }),
+      R("bed7", "Bedroom 7", "sleeping", -6, 23, -1, 28, [[-1, 25]], { bedroom: true, cap: [0, 28] }),
+      R("bed8", "Bedroom 8", "sleeping", 1, 23, 6, 28, [[1, 25]], { bedroom: true, cap: [0, 28] }),
+
+      // Detached on purpose. A prison break should not open into the corridor the colony sleeps on.
+      R("prison", "Prison", "prisoners", 9, -13, 15, -7, [[12, -13]], { prison: true }),
+    ];
+
+    // Only ever plan bedrooms the colony has people for, plus one spare for the next arrival.
+    return rooms.filter((r) => !r.bedroom || Number(r.key.replace("bed", "")) <= population + 1);
+  }
+
+  /** Every cell along a rect's perimeter, corners included, once each. */
+  static perimeter(r) {
+    const cells = [];
+    for (let x = r.x0; x <= r.x1; x++) { cells.push([x, r.z0]); cells.push([x, r.z1]); }
+    for (let z = r.z0 + 1; z <= r.z1 - 1; z++) { cells.push([r.x0, z]); cells.push([r.x1, z]); }
+    return cells;
+  }
+
+  /**
+   * What already stands on the house footprint, as a lookup keyed "x,z".
+   *
+   * Refreshed once per build pass rather than per cell. Shared walls mean most of a new room's
+   * perimeter is already there, and asking the game about each of twenty four cells in turn cost
+   * more time than the whole rest of the turn.
+   */
+  async occupancy() {
+    const b = this.base;
+    const held = new Map();
+    try {
+      const res = await api.get(`/things?rect=${b.x - 26},${b.z - 26},53,60&limit=900`);
+      for (const t of res.things ?? []) {
+        const def = String(t.def ?? "");
+        const isBuilding = String(t.cat ?? "") === "Building";
+        const pending = /^(Blueprint|Frame)_/i.test(def);
+        if (!isBuilding && !pending) continue;
+        const clean = def.replace(/^(Blueprint|Frame)_/i, "");
+        held.set(`${t.x},${t.z}`, { def: clean, pending });
+      }
+    } catch {}
+    return held;
+  }
+
+  /**
+   * Put a room up, skipping the walls its neighbours already provided.
+   *
+   * Nothing is ordered unless the whole room can be paid for. A half funded room is worse than no
+   * room: the colonist spends the day carrying wood to blueprints that cannot finish, and an
+   * unclosed rectangle is not a room at all, so it gets no roof, no temperature and none of the
+   * mood that made it worth building.
+   */
+  /**
+   * Take a room's ground back from the fields.
+   *
+   * Fields are sited beside the colony on day one, when there is no house to avoid, so by the
+   * time a room is paid for a crop may be standing where its floor goes. RimWorld will not put a
+   * growing zone and a building on the same cell, so the blueprints would simply be refused,
+   * silently, one cell at a time, and the room would never close.
+   */
+  async clearZoneFor(room) {
+    try {
+      const map = await api.get("/map");
+      const cells = [];
+      for (let x = room.x0; x <= room.x1; x++) for (let z = room.z0; z <= room.z1; z++) cells.push([x, z]);
+      for (const z of map.zones ?? []) {
+        if (z.type !== "Growing" && z.type !== "Stockpile") continue;
+        const hits = cells.filter(([x, cz]) => x >= z.minX && x <= z.maxX && cz >= z.minZ && cz <= z.maxZ);
+        if (hits.length === 0) continue;
+        // Whole zone swallowed by the room: it has no reason to exist any more.
+        if (hits.length >= z.cells) {
+          await api.tryPost("/zone/update", { id: z.id, delete: true });
+          this.zones.delete([...this.zones].find((k) => k.startsWith(String(z.label ?? "").toLowerCase())) ?? "");
+          this.log(`${z.label} removed: ${room.label} is being built on all of it.`);
+        } else {
+          await api.tryPost("/zone/update", { id: z.id, removeCells: hits });
+          this.log(`${z.label} trimmed by ${hits.length} cells to make room for ${room.label}.`);
+        }
+      }
+    } catch {}
+  }
+
+  async buildRoom(room, wood, held) {
+    if (this.placed.has(`room-${room.key}`)) return "already";
+    await this.clearZoneFor(room);
+
+    const doors = new Map(room.doors.map((d) => [`${d.x},${d.z}`, d]));
+    const items = [];
+
+    // The corridor cap. It is a door and not a wall so the next pair of bedrooms can extend
+    // straight through it without anything being torn down, and it sits in the one cell between
+    // the two facing bedrooms, which belongs to neither room's perimeter. Adding it to the door
+    // map did nothing at all for exactly that reason: the perimeter loop never visited the cell,
+    // so the corridor was left open to the sky, unroofed and unheated.
+    if (room.cap) {
+      const cx = this.base.x + room.cap[0], cz = this.base.z + room.cap[1];
+      const there = held.get(`${cx},${cz}`);
+      if (!there) items.push({ def: "Door", stuff: "WoodLog", x: cx, z: cz });
+    }
+
+    let standingWalls = 0;
+    for (const [x, z] of Agent.perimeter(room)) {
+      const key = `${x},${z}`;
+      const there = held.get(key);
+      const wantsDoor = doors.has(key);
+      if (there) {
+        // A door already in the right cell is the shared wall doing its job.
+        if (wantsDoor && there.def === "Door") doors.delete(key);
+        standingWalls++;
+        continue;
+      }
+      if (wantsDoor) { items.push({ def: "Door", stuff: "WoodLog", x, z }); doors.delete(key); continue; }
+      items.push({ def: "Wall", stuff: "WoodLog", x, z });
+    }
+    // Any door cell that is currently a plain wall: leave it. Tearing a finished wall out to fit a
+    // door costs a colonist-hour and the room still works; the plan puts doors in from the start.
+    if (items.length === 0) {
+      this.placed.set(`room-${room.key}`, { def: "Room", x: room.x0, z: room.z0 });
+      return "already";
+    }
+
+    const wallCount = items.filter((i) => i.def === "Wall").length;
+    const doorCount = items.length - wallCount;
+    const cost = wallCount * 5 + doorCount * 25;
+    if (wood < cost + 15) return { short: cost + 15 - wood, cost };
+
+    const r = await api.tryPost("/build/bulk", { items });
+    const landed = (r?.results ?? []).filter((x) => x && x.ok !== false).length;
+    if (!r || landed < Math.ceil(items.length * 0.6)) {
+      this.log(`${room.label}: only ${landed} of ${items.length} blueprints landed, will retry.`);
+      return false;
+    }
+    this.placed.set(`room-${room.key}`, { def: "Room", x: room.x0, z: room.z0 });
+    this.stats.orders++;
+    await this.thought(`${room.label} laid out for ${room.purpose}: ${landed} new walls and doors, ${standingWalls} already shared with the rooms beside it, about ${cost} wood.`);
+    await this.narrate("room-" + room.key, `${room.label} started`,
+      `${room.label} blueprinted off the great hall for ${room.purpose}. ${landed} new cells, ${standingWalls} walls shared with neighbouring rooms, roughly ${cost} of the ${wood} wood in store.`,
+      0, { priority: "high" });
+    return "placed";
+  }
+
+  /**
+   * Where each thing belongs, in the room built for it.
+   *
+   * Keyed by room, so a bench never ends up in the corridor and a bed never ends up beside the
+   * stove. Coordinates are interior cells, offset from the base origin.
+   */
+  static FURNITURE = {
+    // Great hall: the table sits in the north west quarter, clear of all four door approaches,
+    // with its stools cardinally adjacent. A stool on a diagonal is not a seat: RimWorld only
+    // counts a chair as a place to eat when it shares an edge with a table cell, and the run
+    // before this one had its one stool placed corner to corner with the table, so nobody ever
+    // ate at it and the colony carried "ate without a table" for five days.
+    hall: [
+      { key: "table", def: "Table1x2c", x: -2, z: 1, rot: 0, stuff: "WoodLog", wood: 30 },
+      { key: "stool", def: "Stool", x: -1, z: 1, rot: 3, stuff: "WoodLog", wood: 25 },
+      { key: "stool2", def: "Stool", x: -1, z: 2, rot: 3, stuff: "WoodLog", wood: 25, needPop: 2 },
+    ],
+    // Cooking and butchering together, away from where anyone sleeps.
+    kitchen: [
+      { key: "campfire2", def: "Campfire", x: 4, z: 2, wood: 20, replaces: "campfire" },
+      { key: "butchertable", def: "TableButcher", x: 6, z: 2, rot: 0, stuff: "WoodLog", wood: 120 },
+      { key: "stove", def: "FueledStove", x: 4, z: 0, rot: 0, steel: 80 },
+    ],
+    workshop: [
+      { key: "craftingspot", def: "CraftingSpot", x: -6, z: 1 },
+      { key: "research", def: "SimpleResearchBench", x: -6, z: -1, rot: 0, stuff: "WoodLog", wood: 100, steel: 25 },
+      { key: "smithy", def: "ElectricSmithy", x: -7, z: -1, rot: 0, steel: 100, optional: true },
+    ],
+    bed1: [{ key: "bed1", def: "Bed", x: -4, z: 6, rot: 0, stuff: "WoodLog", wood: 45 }],
+    bed2: [{ key: "bed2", def: "Bed", x: 3, z: 6, rot: 0, stuff: "WoodLog", wood: 45 }],
+    bed3: [{ key: "bed3", def: "Bed", x: -4, z: 11, rot: 0, stuff: "WoodLog", wood: 45 }],
+    bed4: [{ key: "bed4", def: "Bed", x: 3, z: 11, rot: 0, stuff: "WoodLog", wood: 45 }],
+    bed5: [{ key: "bed5", def: "Bed", x: -4, z: 21, rot: 0, stuff: "WoodLog", wood: 45 }],
+    bed6: [{ key: "bed6", def: "Bed", x: 3, z: 21, rot: 0, stuff: "WoodLog", wood: 45 }],
+    bed7: [{ key: "bed7", def: "Bed", x: -4, z: 26, rot: 0, stuff: "WoodLog", wood: 45 }],
+    bed8: [{ key: "bed8", def: "Bed", x: 3, z: 26, rot: 0, stuff: "WoodLog", wood: 45 }],
+    hospital: [
+      { key: "medbed1", def: "Bed", x: -4, z: 15, rot: 0, stuff: "WoodLog", wood: 45 },
+      { key: "medbed2", def: "Bed", x: -4, z: 17, rot: 0, stuff: "WoodLog", wood: 45 },
+    ],
+    research: [{ key: "research2", def: "SimpleResearchBench", x: 3, z: 16, rot: 0, stuff: "WoodLog", wood: 100, steel: 25, optional: true }],
+    prison: [{ key: "prison_bed", def: "Bed", x: 12, z: -10, rot: 0, stuff: "WoodLog", wood: 45 }],
+  };
+
   async manageBase(colonists, resources) {
     const b = this.base;
     const wood = resources.WoodLog ?? 0;
@@ -1321,128 +1711,68 @@ export class ColonyAgent {
       built = new Set((s.groups ?? s.summary ?? []).map((g) => g.def));
     } catch {}
 
-    // A butcher spot costs nothing and unlocks the whole meat supply chain.
+    // The three things worth more than any wall: something to cook on, somewhere to sleep, and a
+    // table to eat at. All three cost less than a fifth of a room and go in before one.
     if (!built.has("ButcherSpot") && !built.has("TableButcher")) {
-      await this.place("butcherspot", "ButcherSpot", b.x + 6, b.z - 2, { force: true });
+      await this.place("butcherspot", "ButcherSpot", b.x + 6, b.z + 2, { force: true });
     }
-
-    // Campfire first: warmth, light, cooking. 20 wood.
     if (wood >= 20 && !built.has("Campfire")) {
-      if ((await this.place("campfire", "Campfire", b.x - 1, b.z - 1, { force: true })) === "placed") {
-        await this.thought("Campfire blueprint down: warmth, light and simple meals.");
+      if ((await this.place("campfire", "Campfire", b.x + 2, b.z + 2, { force: true })) === "placed") {
+        await this.thought("Campfire down: warmth, light and cooked food. It moves into the kitchen once there is a kitchen.");
+      }
+    }
+    if (wood >= 45 && !this.hasAnyBed(built)) {
+      await this.place("bed", "Bed", b.x - 1, b.z - 1, { stuff: "WoodLog", rot: 0, force: true });
+    }
+
+    // Rooms, in the order a colony actually needs them. Each one waits until the colony can pay
+    // for the whole thing, so nothing is ever left as an unclosed rectangle.
+    const cheapDone = built.has("Campfire") && this.hasAnyBed(built);
+    if (cheapDone) {
+      const held = await this.occupancy();
+      const plan = this.roomPlan(colonists.length);
+      for (const room of plan) {
+        if (room.prison && (colonists.length < 2 || !this.placed.has("room-hall"))) continue;
+        if (!room.first && !this.placed.has("room-hall")) continue;
+        const result = await this.buildRoom(room, wood, held);
+        if (result === "placed") break;                 // one room at a time, finish it first
+        if (result && result.short) {
+          if (this.every(`short-${room.key}`, 120)) this.log(`${room.label} needs about ${result.cost} wood, ${result.short} more than the ${wood} in store.`);
+          break;                                        // and do not skip ahead to a cheaper room
+        }
       }
     }
 
-    // Bed, table, chair: the three biggest early mood fixes.
-    if (wood >= 45 && !built.has("Bed")) await this.place("bed", "Bed", b.x - 1, b.z + 1, { stuff: "WoodLog", rot: 0, force: true });
-    if (wood >= 30 && !built.has("Table1x2c") && !built.has("Table2x2c")) {
-      if ((await this.place("table", "Table1x2c", b.x + 1, b.z + 1, { stuff: "WoodLog", rot: 0, force: true })) === "placed") {
-        await this.thought("Dining table placed. No more eating on the floor.");
-      }
-    }
-    if (wood >= 25 && !built.has("Stool") && !built.has("DiningChair")) await this.place("stool", "Stool", b.x + 1, b.z, { stuff: "WoodLog", force: true });
-
-    // Founder's hut: 7x7 wooden walls, door on the south side. ~85 wood.
-    // Walls last of the early build: only once the campfire, bed and table exist, so 85 wood
-    // and several hours of construction cannot crowd out the things that cost a fifth of that
-    // and matter more.
-    const cheapDone = built.has("Campfire") && this.hasAnyBed(built) && (built.has("Table1x2c") || built.has("Table2x2c"));
-    if (wood >= 80 && cheapDone && !this.placed.has("hut")) {
-      const items = [];
-      for (let x = b.x - 3; x <= b.x + 3; x++) {
-        items.push({ def: "Wall", stuff: "WoodLog", x, z: b.z + 3 });
-        if (x !== b.x) items.push({ def: "Wall", stuff: "WoodLog", x, z: b.z - 3 });
-      }
-      for (let z = b.z - 2; z <= b.z + 2; z++) {
-        items.push({ def: "Wall", stuff: "WoodLog", x: b.x - 3, z });
-        items.push({ def: "Wall", stuff: "WoodLog", x: b.x + 3, z });
-      }
-      items.push({ def: "Door", stuff: "WoodLog", x: b.x, z: b.z - 3 });
-      const r = await api.tryPost("/build/bulk", { items });
-      // /build/bulk reports per-item outcomes inside `results` and returns ok even when every
-      // blueprint was rejected. Recording the hut as built on a total failure permanently gates
-      // the growing zones, traps and research bench behind a structure that does not exist.
-      const landed = (r?.results ?? []).filter((x) => x && x.ok !== false).length;
-      if (r && landed >= Math.ceil(items.length * 0.6)) {
-        this.placed.set("hut", { def: "Wall", x: b.x, z: b.z });
-        this.stats.orders++;
-        await this.thought(`Founder's hut: ${landed} of ${items.length} wall and door blueprints placed.`);
-        await this.narrate("hut", "shelter started", `Seven by seven wooden hut blueprinted at the base with a south door, ${landed} of ${items.length} cells accepted, using part of the ${wood} wood stockpiled.`, 0, { priority: "high" });
-      } else if (r) {
-        this.log(`Hut placement rejected: only ${landed} of ${items.length} blueprints landed. Will retry.`);
+    // Furniture, but only into rooms that exist. A bed blueprinted where a bedroom has not been
+    // built yet is a bed standing in a field.
+    for (const [roomKey, items] of Object.entries(Agent.FURNITURE)) {
+      if (!this.placed.has(`room-${roomKey}`)) continue;
+      for (const it of items) {
+        if (it.needPop && colonists.length < it.needPop) continue;
+        if (it.wood && wood < it.wood) continue;
+        if (it.steel && steel < it.steel) continue;
+        if (built.has(it.def) && it.optional) continue;
+        await this.place(it.key, it.def, b.x + it.x, b.z + it.z, { stuff: it.stuff, rot: it.rot ?? 0, exact: true });
       }
     }
 
-    // Recreation.
+    // Recreation stays outdoors until there is a room with space for it: a horseshoes pin needs a
+    // clear lane in front of it, and indoors that lane is a doorway.
     if (wood >= 30 && !built.has("HorseshoesPin")) {
-      if ((await this.place("horseshoes", "HorseshoesPin", b.x - 6, b.z, { stuff: "WoodLog", force: true })) === "placed") {
-        await this.thought("Horseshoe pin placed for recreation.");
-      }
+      await this.place("horseshoes", "HorseshoesPin", b.x - 6, b.z - 7, { stuff: "WoodLog", rot: 0 });
     }
 
-    // Growing zones once the hut is underway.
-    if (this.placed.has("hut") || wood >= 40) {
-      if (!this.zones.has("rice")) {
-        const z = await api.tryPost("/zone", { type: "growing", rect: { x: b.x - 8, z: b.z + 5, w: 8, h: 6 }, plant: "Plant_Rice", label: "Rice" });
-        if (z) { this.zones.add("rice"); await this.thought("Rice field zoned. Fast food buffer."); }
-      }
-      if (!this.zones.has("potato")) {
-        const z = await api.tryPost("/zone", { type: "growing", rect: { x: b.x + 1, z: b.z + 5, w: 8, h: 6 }, plant: "Plant_Potato", label: "Potatoes" });
-        if (z) this.zones.add("potato");
-      }
-      if (!this.zones.has("healroot")) {
-        const z = await api.tryPost("/zone", { type: "growing", rect: { x: b.x - 8, z: b.z - 7, w: 4, h: 4 }, plant: "Plant_Healroot", label: "Healroot" });
-        if (z) this.zones.add("healroot");
-      }
-    }
-
-    // One bed per colonist.
-    const extra = colonists.length - 1;
-    for (let i = 1; i <= extra; i++) {
-      if (wood < 45) break;
-      await this.place(`bed-${i}`, "Bed", b.x + 5 + (i % 4) * 2, b.z + 8 + Math.floor(i / 4) * 3, { stuff: "WoodLog", rot: 0 });
-    }
-
-    // Perimeter wooden spike traps: cheap defense, but only once the hut and bed exist.
-    if (wood >= 150 && this.placed.has("hut") && built.has("Bed")) {
-      const trapCoords = [
-        [b.x, b.z - 6], [b.x + 4, b.z - 5], [b.x - 4, b.z - 5], [b.x + 6, b.z - 3]
-      ];
+    // Traps sit south of the warehouse door, off the path anyone walks, once there is something
+    // behind them worth defending.
+    if (wood >= 150 && this.placed.has("room-warehouse")) {
+      const trapCoords = [[-4, -11], [4, -11], [-2, -13], [2, -13], [-6, -9], [6, -9]];
       for (let i = 0; i < trapCoords.length; i++) {
-        const [tx, tz] = trapCoords[i];
-        await this.place(`trap-${i}`, "TrapSpike", tx, tz, { stuff: "WoodLog" });
+        await this.place(`trap-${i}`, "TrapSpike", b.x + trapCoords[i][0], b.z + trapCoords[i][1], { stuff: "WoodLog", exact: true });
       }
     }
 
-    // Prisoner recruitment hut: 5x5 wooden walls at (b.x + 10, b.z) with a bed set for prisoners
-    if (wood >= 220 && colonists.length >= 2 && this.placed.has("hut") && !this.placed.has("prison_hut")) {
-      const px = b.x + 10, pz = b.z;
-      const prisonItems = [];
-      for (let x = px - 2; x <= px + 2; x++) {
-        prisonItems.push({ def: "Wall", stuff: "WoodLog", x, z: pz + 2 });
-        if (x !== px) prisonItems.push({ def: "Wall", stuff: "WoodLog", x, z: pz - 2 });
-      }
-      for (let z = pz - 1; z <= pz + 1; z++) {
-        prisonItems.push({ def: "Wall", stuff: "WoodLog", x: px - 2, z });
-        prisonItems.push({ def: "Wall", stuff: "WoodLog", x: px + 2, z });
-      }
-      prisonItems.push({ def: "Door", stuff: "WoodLog", x: px, z: pz - 2 });
-      const r = await api.tryPost("/build/bulk", { items: prisonItems });
-      const landedPrison = (r?.results ?? []).filter((x) => x && x.ok !== false).length;
-      if (r && landedPrison >= Math.ceil(prisonItems.length * 0.6)) {
-        this.placed.set("prison_hut", { def: "Wall", x: px, z: pz });
-        await this.place("prison_bed", "Bed", px, pz, { stuff: "WoodLog", rot: 0 });
-        await this.thought("Prisoner hut and bed placed for recruitment.");
-      }
-    }
-
-    // Research bench when the materials exist.
-    if (wood >= 100 && steel >= 25 && !built.has("SimpleResearchBench")) {
-      if ((await this.place("research", "SimpleResearchBench", b.x + 8, b.z - 2, { stuff: "WoodLog", rot: 0, force: true })) === "placed") {
-        await this.thought("Research bench placed. The climb out of the stone age starts here.");
-        await this.narrate("bench", "research bench started", `Simple research bench blueprinted. Wood ${wood}, steel ${steel}. The climb out of the neolithic starts now.`, 0, { priority: "high", askChat: true });
-      }
-    }
+    await this.manageStorage(colonists);
+    await this.manageFarms(colonists.length);
   }
 
   async managePrisoners(colonists, snap) {
@@ -1665,7 +1995,11 @@ export class ColonyAgent {
       // the only way to hunt, which is the actual food supply. Burying Construction during a
       // food emergency meant the last founder queued a bow bill on a crafting spot that was
       // never built, and starved beside 265 wood.
-      return { ...base, PlantCutting: 1, Growing: 1, Cooking: 1, Hunting: 2, Construction: 2,
+      // PlantCutting above Growing, not level with it. Harvesting a wild berry bush is
+      // PlantCutting and pays in minutes; sowing is Growing and pays in days. Levelling them let
+      // a founder at twenty percent food walk twenty nine cells to sow healroot, which is
+      // medicine, while sixteen designated berry bushes stood ten cells from the door.
+      return { ...base, PlantCutting: 1, Growing: 2, Cooking: 1, Hunting: 2, Construction: 2,
                Crafting: 2, Hauling: 4, Mining: 4, Research: 4, Tailoring: 4, Smithing: 4 };
     }
     if (this.weaponRush) {
@@ -1702,6 +2036,43 @@ export class ColonyAgent {
     if (mode === this.workPlanMode && knownPawns) return;
     for (const c of colonists) this.configured.add(`work-${c.id}`);
     await this.applyWorkPlan(colonists, `mode ${mode}`);
+  }
+
+  /**
+   * Timetables that match the colonist rather than the clock.
+   *
+   * A Night owl is a real mood swing, not flavour text: awake through the night and asleep
+   * through the middle of the day, they carry a standing bonus; kept on the ordinary daytime
+   * schedule they carry the penalty instead, every day, for the whole colony's life. The founder
+   * of this run is one, so it is worth a call on the first day rather than a note for later.
+   */
+  async manageSchedules(colonists) {
+    if (!this.every("schedule", 60)) return;
+    for (const c of colonists) {
+      if (c.downed || c.dead) continue;
+      const owl = (c.traits ?? []).some((t) => /night\s*owl/i.test(String(t)));
+      const key = `sched-${c.id}-${owl ? "owl" : "day"}`;
+      if (this.placed.has(key)) continue;
+
+      if (owl) {
+        // Asleep through the middle of the day, working the dark hours, with an hour of
+        // recreation either side of the shift.
+        const hours = [];
+        for (let h = 0; h < 24; h++) {
+          if (h >= 9 && h <= 15) hours.push("Sleep");
+          else if (h === 16 || h === 8) hours.push("Joy");
+          else hours.push("Work");
+        }
+        const r = await api.tryPost("/pawn/schedule", { pawn: c.id, hours });
+        if (r) {
+          this.placed.set(key, {});
+          await this.thought(`${c.name} is a night owl: moved onto a night shift, asleep from nine to three. Working against the trait is a standing mood penalty every single day.`);
+        }
+      } else {
+        const r = await api.tryPost("/pawn/schedule", { pawn: c.id, preset: "optimal" });
+        if (r) this.placed.set(key, {});
+      }
+    }
   }
 
   async manageWork(colonists) {
@@ -1768,6 +2139,187 @@ export class ColonyAgent {
       if (await this.alreadyHave(def)) { this.placed.set(key, { def, x, z }); continue; }
       await this.place(key, def, x, z, { force: true });
     }
+  }
+
+  /**
+   * Spike traps covering the approach to the door.
+   *
+   * Cheap, they need no research and no power, and they handle the early raids and manhunter
+   * packs that a one or two person colony cannot fight in the open. Deliberately placed off the
+   * direct path between the door and the fields, because a colonist who walks over their own
+   * trap is a self inflicted casualty.
+   */
+  async manageDefenses(resources) {
+    if (!this.every("defenses", 45)) return;
+    const wood = resources.WoodLog ?? 0;
+    if (wood < 150) return;                       // walls and furniture come first
+    if (!this.placed.has("hut")) return;          // nothing to defend yet
+    const b = this.base;
+    const built = this.builtDefs ?? new Set();
+    const have = built.has("TrapSpike") ? 1 : 0;
+    if (have && this.placed.has("trap-5")) return;
+
+    // An arc south of the hut, where raiders approach the door, two cells off the walls.
+    const spots = [
+      [b.x - 4, b.z - 6], [b.x - 2, b.z - 7], [b.x, b.z - 7],
+      [b.x + 2, b.z - 7], [b.x + 4, b.z - 6], [b.x + 5, b.z - 4],
+    ];
+    let placed = 0;
+    for (let i = 0; i < spots.length; i++) {
+      const [x, z] = spots[i];
+      const r = await this.place(`trap-${i}`, "TrapSpike", x, z, { stuff: "WoodLog", force: true });
+      if (r === "placed") placed++;
+    }
+    if (placed > 0) {
+      await this.thought(`${placed} spike trap(s) placed on the approach to the door, clear of the path the colonists use.`);
+      await this.narrate("defenses", "building defenses", `Spike traps going in on the approach. They cost wood and nothing else, and they answer the early raids this colony could not fight in the open.`, 240000);
+    }
+  }
+
+  /**
+   * Primitive buildings that a proper one replaces.
+   *
+   * A sleeping spot is a bed you sleep badly in, a butcher spot is a slower butcher table with a
+   * worse yield, and a crafting spot is a bench with no bonuses. Leaving the primitive standing
+   * next to its replacement is clutter that a colonist can still choose to use, so once the real
+   * thing exists the old one is deconstructed and its space and materials come back.
+   */
+  static UPGRADES = [
+    { old: "SleepingSpot", replacedBy: ["Bed", "DoubleBed", "RoyalBed", "Bedroll"], note: "a real bed" },
+    { old: "ButcherSpot", replacedBy: ["TableButcher"], note: "a butcher table" },
+    { old: "CraftingSpot", replacedBy: ["FueledSmithy", "ElectricSmithy", "TableMachining", "HandTailoringBench", "ElectricTailoringBench"], note: "a proper workbench" },
+    { old: "Campfire", replacedBy: ["FueledStove", "ElectricStove"], note: "a stove" },
+  ];
+
+  /** Tear down anything a better building has superseded. */
+  async manageUpgrades() {
+    if (!this.every("upgrades", 40)) return;
+    const built = this.builtDefs ?? new Set();
+    for (const u of ColonyAgent.UPGRADES) {
+      if (!built.has(u.old)) continue;
+      if (!u.replacedBy.some((d) => built.has(d))) continue;
+      try {
+        const res = await api.get(`/things?def=${u.old}&player=1&limit=20`);
+        const ids = (res.things ?? []).map((t) => t.id);
+        if (ids.length === 0) continue;
+        const r = await api.tryPost("/designate", { type: "deconstruct", things: ids });
+        if (r && (r.designated ?? 0) > 0) {
+          this.stats.orders++;
+          await this.thought(`Tearing down ${r.designated} ${u.old}: ${u.note} has replaced it.`);
+          await this.narrate("upgrade", "retiring an old building", `The colony has ${u.note} now, so the old ${u.old} is coming down.`, 180000);
+        }
+      } catch {}
+    }
+  }
+
+  /**
+   * Corpses out of sight. Anything dead within the lived-in area is dragged to the far dump,
+   * because every colonist who walks past one takes a mood hit that dwarfs hunger.
+   */
+  /**
+   * Where things are kept, and what is allowed to be kept there.
+   *
+   * Four separate stores, because RimWorld punishes mixing them:
+   *
+   * - the warehouse, indoors, for goods and materials, so nothing sits out in the rain rusting
+   *   and deteriorating and so a colonist fetching steel does not walk across the map for it;
+   * - the cold room, for meals, raw food and carcasses fresh enough to still be worth butchering;
+   * - a pit for human bodies, far enough away that nobody sees it, because a rotting corpse in
+   *   sight is minus eighteen mood to everyone who walks past;
+   * - a separate pit for insectoid bodies, kept apart from the human one so a hauler emptying
+   *   one never wanders into the other.
+   */
+  static STORES = [
+    {
+      key: "warehouse-store", label: "Warehouse", type: "stockpile", priority: "Preferred",
+      rect: (b) => ({ x: b.x - 2, z: b.z - 8, w: 5, h: 5 }), room: "room-warehouse",
+      // Everything except bodies. Bodies have rooms of their own.
+      filter: { denyCategories: ["CorpsesHumanlike", "CorpsesAnimal", "CorpsesMechanoid", "CorpsesInsect"] },
+    },
+    {
+      key: "freezer-store", label: "Cold room", type: "stockpile", priority: "Important",
+      rect: (b) => ({ x: b.x + 10, z: b.z - 2, w: 5, h: 5 }), room: "room-freezer",
+      // Food, and carcasses that have not turned. AllowRotten off keeps the spoiled ones out, so
+      // the cold room never becomes the thing it exists to prevent.
+      // CorpsesInsect sits under CorpsesAnimal in the game's own category tree, so allowing
+      // animal carcasses allows megaspiders too unless they are denied right after. Nobody wants
+      // a megaspider in the larder.
+      filter: {
+        clear: true,
+        categories: ["Foods", "CorpsesAnimal"],
+        denyCategories: ["CorpsesInsect"],
+        special: { AllowRotten: false },
+      },
+    },
+    {
+      key: "human-pit", label: "Human pit", type: "dumping", priority: "Low",
+      rect: (b) => ({ x: b.x - 32, z: b.z - 30, w: 5, h: 5 }), far: true,
+      filter: { clear: true, categories: ["CorpsesHumanlike"] },
+    },
+    {
+      key: "insect-pit", label: "Insect pit", type: "dumping", priority: "Low",
+      rect: (b) => ({ x: b.x + 32, z: b.z - 30, w: 5, h: 5 }), far: true,
+      filter: { clear: true, categories: ["CorpsesInsect", "CorpsesMechanoid"] },
+    },
+    {
+      key: "rubble", label: "Chunks and rubble", type: "dumping", priority: "Low",
+      rect: (b) => ({ x: b.x + 14, z: b.z - 14, w: 6, h: 5 }), far: true,
+      filter: { clear: true, categories: ["StoneChunks"] },
+    },
+  ];
+
+  async manageStorage(colonists) {
+    if (!this.every("storage", 20)) return;
+    const b = this.base;
+    for (const store of Agent.STORES) {
+      if (this.zones.has(store.key)) continue;
+      if (store.room && !this.placed.has(store.room)) continue;
+      const rect = store.rect(b);
+      // Keep the far pits on the map even when the colony landed near an edge.
+      const size = this.mapSize ?? 250;
+      rect.x = Math.max(2, Math.min(size - rect.w - 2, rect.x));
+      rect.z = Math.max(2, Math.min(size - rect.h - 2, rect.z));
+      const r = await api.tryPost("/zone", {
+        type: store.type, rect, priority: store.priority, label: store.label, filter: store.filter,
+      });
+      if (!r) continue;
+      this.zones.add(store.key);
+      const unknown = r.filter?.unknown ?? [];
+      if (unknown.length) this.log(`${store.label}: filter names the game did not recognise: ${unknown.join(", ")}`);
+      await this.thought(`${store.label} zoned: ${r.filter?.summary ?? store.label}.`);
+    }
+  }
+
+  /**
+   * Corpses, sorted by what they are.
+   *
+   * Everything used to go to one dump. That put a raider, a megaspider and a deer the colony
+   * meant to eat in the same pile, which wasted the meat and left the bodies in view. Now each
+   * kind is hauled to the store that accepts it, and the stores' own filters decide the rest.
+   */
+  async manageCorpses() {
+    if (!this.every("corpses", 25)) return;
+    const b = this.base;
+    try {
+      const res = await api.get(`/things?cat=Item&detail=1&rect=${b.x - 26},${b.z - 26},53,60&limit=250`);
+      const corpses = (res.things ?? []).filter((t) => t.corpse || /corpse/i.test(String(t.label ?? "")));
+      if (corpses.length === 0) return;
+
+      // Unforbidding is what actually makes a hauler pick a body up; the zone filters route it.
+      await api.tryPost("/allow", { things: corpses.map((t) => t.id) });
+      this.stats.orders++;
+
+      const kind = (t) => {
+        const s = `${t.def ?? ""} ${t.label ?? ""}`.toLowerCase();
+        if (/megaspider|spelopede|megascarab|insect/.test(s)) return "insect";
+        if (/mech|centipede|lancer|scyther|pikeman/.test(s)) return "mech";
+        if (t.humanlike || /human|raider|tribal|pirate|drifter|outlander/.test(s)) return "human";
+        return "animal";
+      };
+      const counts = corpses.reduce((acc, t) => { const k = kind(t); acc[k] = (acc[k] ?? 0) + 1; return acc; }, {});
+      const parts = Object.entries(counts).map(([k, n]) => `${n} ${k}`).join(", ");
+      await this.thought(`${corpses.length} bodies to clear (${parts}). Animals to the cold room while they are still worth butchering, people to the far pit, insects to their own.`);
+    } catch {}
   }
 
   /** Unforbid food anywhere near the base so the colony's own AI can actually eat it. */
@@ -1874,7 +2426,7 @@ export class ColonyAgent {
     if (this.every("beds", 25)) await this.ensureBeds(colonists, resources);
 
     // 5. Food and cooking scale with population, not with a fixed field size.
-    if (this.every("farm-scale", 60)) await this.scaleFarms(n);
+    if (this.every("farm-scale", 60)) await this.manageFarms(n);
 
     if (n > (this.lastKnownPopulation ?? 1)) {
       const gained = n - (this.lastKnownPopulation ?? 1);
@@ -1968,15 +2520,18 @@ export class ColonyAgent {
     const want = colonists.length + 1;                  // one spare, and the spare becomes the prison bed
     if (bedCount >= want) return;
 
-    for (let i = bedCount; i < want && i < 14; i++) {
-      // Rows of beds two cells apart, north of the hut. The farms are all at z >= b.z + 5.
-      const col = i % 5;
-      const row = Math.floor(i / 5);
-      const x = b.x - 4 + col * 2;
-      const z = b.z - 6 - row * 3;
-      await this.place(`bed-${i}`, "Bed", x, z, { stuff: "WoodLog", rot: 0, force: true });
+    // Beds belong in bedrooms. manageBase places one in each bedroom the moment the room closes,
+    // so the only thing left here is cover for the gap: when someone joins before their room is
+    // up, a free sleeping spot in the great hall beats a bedroll on the dirt outside, and it is
+    // torn down again once a real bed exists for them.
+    const bedrooms = [...this.placed.keys()].filter((k) => /^room-bed\d+$/.test(k)).length;
+    const shortfall = want - Math.max(bedCount, 0);
+    if (shortfall > 0 && bedrooms * 1 < colonists.length) {
+      for (let i = 0; i < Math.min(shortfall, 4); i++) {
+        await this.place(`spot-${i}`, "SleepingSpot", b.x - 2 + i, b.z - 2, { exact: true });
+      }
+      await this.thought(`${colonists.length} colonists and ${bedCount} beds. Sleeping spots in the great hall until the bedrooms close; a spot beats the ground, a bed beats a spot.`);
     }
-    await this.thought(`Beds: ${bedCount} for ${colonists.length} colonists; placing more north of the hut.`);
 
     // The last bed becomes the prison bed, which is what makes recruiting possible at all.
     if (!this.placed.has("prison-bed-set") && bedCount + 1 >= want) {
@@ -1996,21 +2551,90 @@ export class ColonyAgent {
   }
 
   /** Grow the fields as the colony grows. Roughly 6 growing cells per colonist per crop. */
-  async scaleFarms(population) {
+  /**
+   * Crops on ground worth sowing, not on whatever was beside the base.
+   *
+   * The map's fertility is not uniform and the difference is not small: rich soil grows at 140%,
+   * ordinary soil at 100%, gravel at 70%, and sand and stone at nothing at all. The old code put
+   * every field at a fixed offset from the base, which on a gravelly landing site meant a third
+   * less food per tile forever, and which now would put them under the bedroom wing besides.
+   *
+   * /fertility scans a block of map and ranks the plantable squares, which is the same thing the
+   * game's own fertility overlay shows a human player.
+   */
+  async manageFarms(population) {
     const b = this.base;
-    const wanted = Math.min(14, 6 + population * 2);
-    for (const [key, plant, xOff] of [["rice", "Plant_Rice", -8], ["potato", "Plant_Potato", 1]]) {
-      const zoneKey = `${key}-${wanted}`;
+    const wanted = Math.min(12, 5 + population * 2);   // rows per field
+    const fields = [
+      { key: "rice", plant: "Plant_Rice", label: "Rice", w: 7, h: wanted },
+      { key: "potato", plant: "Plant_Potato", label: "Potatoes", w: 7, h: wanted },
+      // Healroot is medicine, and a colonist will walk across the map to sow it. It waits until
+      // there is food in store, because on day one that walk is time not spent eating.
+      ...((this.foodDays ?? 0) > 2.5 ? [{ key: "healroot", plant: "Plant_Healroot", label: "Healroot", w: 4, h: 4 }] : []),
+    ];
+
+    for (const f of fields) {
+      const zoneKey = `${f.key}-${f.h}`;
       if (this.zones.has(zoneKey)) continue;
-      const r = await api.tryPost("/zone", {
-        type: "growing",
-        rect: { x: b.x + xOff, z: b.z + 5, w: 8, h: wanted },
-        plant,
-        label: key === "rice" ? "Rice" : "Potatoes",
-      });
+
+      let rect = null;
+      try {
+        // /fertility takes the CENTRE of the area to scan, not a corner. Passing the corner put
+        // the first fields twenty four cells from the base, which is a colonist walking four
+        // times further to sow, to weed and to carry every harvest home, forever.
+        // A generous limit on purpose. The route ranks by fertility first, so a short list is all
+        // ground on the far side of the house: the only blocks that survive the house filter are
+        // further down it. Thirty was not enough and every field fell back to a fixed plot.
+        const scan = await api.get(`/fertility?x=${b.x}&z=${b.z}&w=56&h=56&block=${Math.min(f.w, f.h)}&min=0.85&limit=90`);
+        const taken = this.farmRects ?? (this.farmRects = []);
+
+        // The house is not a farm site. Its footprint runs from the workshop in the west to the
+        // cold room in the east, and from the traps south of the warehouse to the last bedroom.
+        // Reserve the rooms that exist, plus the one being built next, and nothing else.
+        //
+        // Reserving the whole planned house on day one was a mistake with a real cost: a house
+        // twenty six cells wide and forty four deep swallowed every fertile block within reach,
+        // so the first rice field landed twenty five cells from where the founder slept. On day
+        // one there is no house, only a colonist who has to walk to the crop twice a day. The
+        // fields start beside the colony and move outwards as rooms actually take their ground.
+        const plan = this.roomPlan(population);
+        const boxes = plan
+          .filter((rm) => this.placed.has(`room-${rm.key}`) || rm.first)
+          .map((rm) => ({ x0: rm.x0 - 1, x1: rm.x1 + 1, z0: rm.z0 - 1, z1: rm.z1 + 1 }));
+        // The staging pile and the traps south of it are not building sites, but they are not
+        // farmland either.
+        boxes.push({ x0: b.x - 4, x1: b.x + 4, z0: b.z - 8, z1: b.z - 2 });
+
+        const overlapsHouse = (c) => boxes.some((h) =>
+          c.x + f.w >= h.x0 && c.x <= h.x1 && c.z + f.h >= h.z0 && c.z <= h.z1);
+
+        // How far a colonist walks from the colony to reach this field.
+        const walkFromHouse = (c) => Math.hypot(c.x + f.w / 2 - b.x, c.z + f.h / 2 - b.z);
+
+        const spot = (scan.best ?? [])
+          .filter((c) => !overlapsHouse(c))
+          .filter((c) => !taken.some((t) => Math.abs(t.x - c.x) < f.w + 1 && Math.abs(t.z - c.z) < f.h + 1))
+          // Best soil first, then the shortest walk from the house wall. A hundredth of a point
+          // of fertility is not worth ten cells each way on every sowing and every harvest.
+          .sort((p1, p2) => (p2.fertility - p1.fertility) || (walkFromHouse(p1) - walkFromHouse(p2)))[0];
+        if (spot) {
+          rect = { x: spot.x, z: spot.z, w: f.w, h: f.h };
+          this.log(`${f.label}: ${spot.fertility} fertility at (${spot.x}, ${spot.z}), ${Math.round(walkFromHouse(spot))} cells from the colony.`);
+        }
+      } catch {}
+
+      // No fertility reading available (older mod build, or nothing scored well): fall back to a
+      // fixed plot west of the house, which is still clear of every planned room.
+      if (!rect) {
+        const idx = fields.indexOf(f);
+        rect = { x: b.x - 12 - idx * 8 - f.w, z: b.z - 2, w: f.w, h: f.h };
+      }
+
+      const r = await api.tryPost("/zone", { type: "growing", rect, plant: f.plant, label: f.label });
       if (r) {
         this.zones.add(zoneKey);
-        this.log(`Farm ${key} sized for ${population} colonists (${8 * wanted} cells).`);
+        (this.farmRects ?? (this.farmRects = [])).push(rect);
+        await this.thought(`${f.label} field sown on the best soil within reach of the house: ${rect.w} by ${rect.h}.`);
       }
     }
   }
@@ -2070,7 +2694,7 @@ export class ColonyAgent {
 
 async function main() {
   const args = process.argv.slice(2);
-  const opt = { speed: 3, stepMs: 700, combatMs: 250, saveDaily: true, quiet: false };
+  const opt = { speed: 1, stepMs: 700, combatMs: 250, saveDaily: true, quiet: false };
   let turns = Infinity;
   for (const a of args) {
     if (a.startsWith("--speed=")) opt.speed = parseInt(a.split("=")[1], 10);

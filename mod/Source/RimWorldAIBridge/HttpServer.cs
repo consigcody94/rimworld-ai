@@ -361,7 +361,7 @@ namespace RimWorldAIBridge
             "/", "/help", "/health", "/status", "/maps", "/map", "/colony", "/snapshot", "/pawns",
             "/things", "/things/summary", "/resources", "/alerts", "/events", "/letters", "/quests",
             "/research", "/grid", "/cell", "/defs", "/screenshot", "/traders", "/trade",
-            "/game/saves", "/agent/owner",
+            "/game/saves", "/agent/owner", "/fertility", "/debug/failures",
         };
 
         public static bool Mutating(string path)
@@ -370,6 +370,7 @@ namespace RimWorldAIBridge
             // Parameterised read routes: /pawn/{id}, /thing/{id}.
             if (path.StartsWith("/pawn/", StringComparison.OrdinalIgnoreCase)) return false;
             if (path.StartsWith("/thing/", StringComparison.OrdinalIgnoreCase)) return false;
+            if (path.StartsWith("/debug/", StringComparison.OrdinalIgnoreCase)) return false;
             return true;
         }
 

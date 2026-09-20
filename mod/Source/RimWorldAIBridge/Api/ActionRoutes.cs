@@ -330,7 +330,7 @@ namespace RimWorldAIBridge
                 return Bridge.Ok("results", results);
             });
 
-            Doc(s, "ANY", "/zone", "Create a zone. {type: stockpile|dumping|growing, cells|rect, plant:ThingDef (growing), priority:Low|Normal|Preferred|Important|Critical (stockpile), label}", r =>
+            Doc(s, "ANY", "/zone", "Create a zone. {type: stockpile|dumping|growing, cells|rect, plant:ThingDef (growing), priority:Low|Normal|Preferred|Important|Critical (stockpile), label, filter}. The filter shapes what a stockpile accepts: {clear:true, categories:[ThingCategoryDef], allow:[ThingDef], deny:[ThingDef], special:{SpecialThingFilterDefName:bool}}. clear empties the filter first, so a corpse pit can be made to hold nothing but corpses. GET /defs?type=category and ?type=filter list the names.", r =>
             {
                 var map = Lookup.MapFrom(r);
                 string type = (r.Arg("type") ?? "stockpile").ToLowerInvariant();
@@ -352,10 +352,11 @@ namespace RimWorldAIBridge
                 if (zone is Zone_Growing g && r.HasArg("plant")) g.SetPlantDefToGrow(Lookup.Def<ThingDef>(r.Arg("plant"), "plant ThingDef"));
                 if (zone is Zone_Stockpile sp && r.HasArg("priority")) sp.settings.Priority = (StoragePriority)Enum.Parse(typeof(StoragePriority), r.Arg("priority"), true);
                 if (r.HasArg("label")) zone.label = r.Arg("label");
-                return Bridge.Ok("zone", Serializers.Zone(zone), "rejectedCells", cells.Count - accepted.Count);
+                var filterReport = ApplyStorageFilter(r, (zone as Zone_Stockpile)?.settings);
+                return Bridge.Ok("zone", Serializers.Zone(zone), "rejectedCells", cells.Count - accepted.Count, "filter", filterReport);
             });
 
-            Doc(s, "ANY", "/zone/update", "Modify a zone. {id, plant, allowSow, priority, label, addCells|removeCells:[[x,z]], delete:true}", r =>
+            Doc(s, "ANY", "/zone/update", "Modify a zone. {id, plant, allowSow, priority, label, addCells|removeCells:[[x,z]], delete:true, filter:{clear,categories,allow,deny,special}}. See /zone for the filter shape.", r =>
             {
                 var map = Lookup.MapFrom(r);
                 int id = r.ArgInt("id", -1);
@@ -371,7 +372,8 @@ namespace RimWorldAIBridge
                 var add = Json.List(r.Body, "addCells"); var rem = Json.List(r.Body, "removeCells");
                 if (add != null) foreach (var o in add) if (o is List<object> pr && pr.Count >= 2) { var c = new IntVec3(Convert.ToInt32(pr[0]), 0, Convert.ToInt32(pr[1])); if (c.InBounds(map) && c.GetZone(map) == null) zone.AddCell(c); }
                 if (rem != null) foreach (var o in rem) if (o is List<object> pr && pr.Count >= 2) { var c = new IntVec3(Convert.ToInt32(pr[0]), 0, Convert.ToInt32(pr[1])); if (zone.ContainsCell(c)) zone.RemoveCell(c); }
-                return Bridge.Ok("zone", Serializers.Zone(zone));
+                var updatedFilter = ApplyStorageFilter(r, (zone as Zone_Stockpile)?.settings);
+                return Bridge.Ok("zone", Serializers.Zone(zone), "filter", updatedFilter);
             });
 
             Doc(s, "ANY", "/area/home", "Add or remove cells from the Home area. {cells|rect, add:true}", r =>
@@ -640,6 +642,79 @@ namespace RimWorldAIBridge
         private static void RequireDev()
         {
             if (BridgeMod.Settings != null && !BridgeMod.Settings.allowDevActions) throw new BridgeException("Dev actions are disabled in mod settings.", 403);
+        }
+
+        /// <summary>
+        /// Shape what a stockpile accepts.
+        ///
+        /// A colony needs storage that discriminates: meals and fresh animal carcasses belong in
+        /// the cold room, human bodies belong in a pit far from anyone's line of sight, and
+        /// insectoid bodies belong in a pit of their own. RimWorld expresses all of that through
+        /// ThingFilter, which was not reachable over the bridge at all, so every stockpile the
+        /// agent made accepted everything and corpses piled up beside the food.
+        ///
+        /// Returns what was actually applied, including names that did not resolve, so an agent
+        /// never has to assume a filter took effect.
+        /// </summary>
+        private static Dictionary<string, object> ApplyStorageFilter(Req r, StorageSettings settings)
+        {
+            if (!Json.Has(r.Body, "filter")) return null;
+            var spec = Json.Obj(r.Body, "filter");
+            if (spec == null) return null;
+            if (settings == null) throw new BridgeException("This zone has no storage settings; only a stockpile or dumping zone can carry a filter.");
+
+            var applied = new List<string>();
+            var unknown = new List<string>();
+
+            if (Json.Bool(spec, "clear", false))
+            {
+                settings.filter.SetDisallowAll();
+                applied.Add("cleared");
+            }
+
+            Action<string, bool> byCategory = (name, allow) =>
+            {
+                var cat = DefDatabase<ThingCategoryDef>.GetNamedSilentFail(name);
+                if (cat == null) { unknown.Add("category:" + name); return; }
+                settings.filter.SetAllow(cat, allow);
+                applied.Add((allow ? "+" : "-") + "category:" + cat.defName);
+            };
+            Action<string, bool> byThing = (name, allow) =>
+            {
+                var td = DefDatabase<ThingDef>.GetNamedSilentFail(name);
+                if (td == null) { unknown.Add("thing:" + name); return; }
+                settings.filter.SetAllow(td, allow);
+                applied.Add((allow ? "+" : "-") + td.defName);
+            };
+
+            foreach (var o in Json.List(spec, "categories") ?? new List<object>()) byCategory(Convert.ToString(o), true);
+            foreach (var o in Json.List(spec, "denyCategories") ?? new List<object>()) byCategory(Convert.ToString(o), false);
+            foreach (var o in Json.List(spec, "allow") ?? new List<object>()) byThing(Convert.ToString(o), true);
+            foreach (var o in Json.List(spec, "deny") ?? new List<object>()) byThing(Convert.ToString(o), false);
+
+            // Special filters are the toggles the storage tab shows as checkboxes: fresh versus
+            // rotten, deadman's apparel, and so on. A cold room wants fresh carcasses and nothing
+            // that has already turned.
+            var special = Json.Obj(spec, "special");
+            if (special != null)
+            {
+                foreach (var kv in special)
+                {
+                    var sf = DefDatabase<SpecialThingFilterDef>.GetNamedSilentFail(kv.Key);
+                    if (sf == null) { unknown.Add("special:" + kv.Key); continue; }
+                    bool allow = Convert.ToString(kv.Value) == "True" || Convert.ToString(kv.Value) == "true" || Convert.ToString(kv.Value) == "1";
+                    settings.filter.SetAllow(sf, allow);
+                    applied.Add((allow ? "+" : "-") + "special:" + sf.defName);
+                }
+            }
+
+            return new Dictionary<string, object>
+            {
+                { "applied", applied },
+                { "unknown", unknown },
+                { "allowedDefCount", settings.filter.AllowedDefCount },
+                { "summary", settings.filter.Summary },
+            };
         }
 
         private static object ForbidHandler(Req r, bool defaultForbidden)
