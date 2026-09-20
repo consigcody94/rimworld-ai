@@ -5,12 +5,26 @@ using Verse;
 
 namespace RimWorldAIBridge
 {
+    public class ChatPart
+    {
+        public string Text;      // set for a text run
+        public string Url;       // set for an emote
+    }
+
+    public class ChatBadge
+    {
+        public string Mark;
+        public Color Color;
+    }
+
     public class ChatMessageItem
     {
         public string User;
-        public string Text;
+        public string Text;                 // plain fallback, still used for width and for logs
         public Color UserColor;
         public DateTime Timestamp;
+        public List<ChatPart> Parts;        // null when the message is plain text
+        public List<ChatBadge> Badges;
     }
 
     /// <summary>
@@ -57,7 +71,8 @@ namespace RimWorldAIBridge
             return sb.ToString();
         }
 
-        public static void AddMessage(string user, string text, string hexColor = null)
+        public static void AddMessage(string user, string text, string hexColor = null,
+                                      List<ChatPart> parts = null, List<ChatBadge> badges = null)
         {
             if (string.IsNullOrEmpty(user) || string.IsNullOrEmpty(text)) return;
             user = Sanitize(user, 25);
@@ -81,13 +96,28 @@ namespace RimWorldAIBridge
                     User = user,
                     Text = text,
                     UserColor = color,
-                    Timestamp = DateTime.UtcNow
+                    Timestamp = DateTime.UtcNow,
+                    Parts = parts,
+                    Badges = badges,
                 });
                 if (Messages.Count > 40)
                 {
                     Messages.RemoveAt(0);
                 }
             }
+        }
+
+        private static string BadgePrefix(ChatMessageItem msg)
+        {
+            if (msg.Badges == null || msg.Badges.Count == 0) return "";
+            var sb = new System.Text.StringBuilder();
+            foreach (var b in msg.Badges)
+            {
+                if (string.IsNullOrEmpty(b.Mark)) continue;
+                sb.Append("<color=#").Append(ColorUtility.ToHtmlStringRGB(b.Color)).Append(">").Append(b.Mark).Append("</color>");
+            }
+            if (sb.Length > 0) sb.Append(' ');
+            return sb.ToString();
         }
 
         public static void OnGUI()
@@ -101,7 +131,7 @@ namespace RimWorldAIBridge
                 Prefs.Save();
             }
 
-            float w = 330f;
+            float w = 340f;
             float h = 250f;
             float x = Screen.width - w - 8f;
             float y = 8f;
@@ -138,15 +168,70 @@ namespace RimWorldAIBridge
             for (int i = 0; i < display.Count; i++)
             {
                 var msg = display[i];
-                float availH = 30f;
-                Rect lineRect = new Rect(x + 6f, lineY, w - 12f, availH);
 
-                // User prefix
+                // A message with no resolved parts is still plain text: one label, as before.
+                if (msg.Parts == null || msg.Parts.Count == 0)
+                {
+                    GUI.color = msg.UserColor;
+                    Widgets.Label(new Rect(x + 6f, lineY, w - 12f, 30f), BadgePrefix(msg) + $"{msg.User}: <color=#E2E8F0>{msg.Text}</color>");
+                    lineY += 32f;
+                    continue;
+                }
+
+                // Emotes are images, so the line is laid out by hand: a cursor walks across the
+                // panel placing each run of text and each emote, and wraps when it runs out of
+                // width. Emotes are drawn at the line height so they sit on the text baseline.
+                float left = x + 6f;
+                float right = x + w - 6f;
+                float cursorX = left;
+                float lineH = 20f;
+
                 GUI.color = msg.UserColor;
-                string label = $"{msg.User}: <color=#E2E8F0>{msg.Text}</color>";
-                Widgets.Label(lineRect, label);
+                string head = BadgePrefix(msg) + msg.User + ": ";
+                float headW = Text.CalcSize(head).x;
+                Widgets.Label(new Rect(cursorX, lineY, headW + 4f, lineH), head);
+                cursorX += headW;
 
-                lineY += 32f;
+                foreach (var part in msg.Parts)
+                {
+                    if (!string.IsNullOrEmpty(part.Url))
+                    {
+                        var tex = EmoteCache.Get(part.Url);
+                        float size = lineH - 2f;
+                        if (tex != null)
+                        {
+                            if (cursorX + size > right) { cursorX = left; lineY += lineH; }
+                            GUI.color = Color.white;
+                            GUI.DrawTexture(new Rect(cursorX, lineY + 1f, size, size), tex, ScaleMode.ScaleToFit);
+                            cursorX += size + 2f;
+                        }
+                        else
+                        {
+                            // Not downloaded yet, or the CDN refused. Show the emote's name, which
+                            // is what the viewer typed, rather than a gap.
+                            GUI.color = new Color(0.55f, 0.70f, 0.95f);
+                            string nm = part.Text ?? "";
+                            float nw = Text.CalcSize(nm).x;
+                            if (cursorX + nw > right) { cursorX = left; lineY += lineH; }
+                            Widgets.Label(new Rect(cursorX, lineY, nw + 4f, lineH), nm);
+                            cursorX += nw + 2f;
+                        }
+                        continue;
+                    }
+
+                    GUI.color = new Color(0.886f, 0.910f, 0.941f);
+                    foreach (var word in (part.Text ?? "").Split(' '))
+                    {
+                        if (word.Length == 0) { cursorX += 4f; continue; }
+                        float ww = Text.CalcSize(word + " ").x;
+                        if (cursorX + ww > right) { cursorX = left; lineY += lineH; }
+                        Widgets.Label(new Rect(cursorX, lineY, ww + 4f, lineH), word);
+                        cursorX += ww;
+                    }
+                }
+
+                lineY += lineH + 6f;
+                if (lineY > y + h - 12f) break;
             }
 
             GUI.color = Color.white;

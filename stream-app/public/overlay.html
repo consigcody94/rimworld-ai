@@ -63,6 +63,18 @@
     <!-- ================= LEFT RAIL ================= -->
     <div class="rail rail-left" id="rail-left">
 
+      <!-- What the AI is trying to do. The same plan is drawn inside the game window, so a
+           viewer watching the capture and a viewer watching this overlay read the same list. -->
+      <section class="panel card card-plan" data-part="hud" id="card-plan" hidden>
+        <div class="card-head">
+          <span class="card-title">AI plan</span>
+          <span class="card-meta" id="plan-day"></span>
+        </div>
+        <div class="plan-goal" id="plan-goal"></div>
+        <ul class="plan-tasks" id="plan-tasks"></ul>
+        <div class="plan-blocker" id="plan-blocker" hidden></div>
+      </section>
+
       <section class="panel card card-research" data-part="hud" id="card-research">
         <div class="card-head">
           <span class="card-title">Research</span>

@@ -1030,12 +1030,83 @@ async function tickSnapshot() {
   }
 }
 
+
+/* --------------------------------------------------------------------------
+   The AI's plan
+
+   Posted by the colony agent whenever it re-plans, and drawn inside the game
+   window too. A colony run by a machine is unreadable from outside: a colonist
+   walks somewhere and nothing tells you whether that was the point or a
+   mistake. This says what it is trying to do and what it is stuck on.
+   -------------------------------------------------------------------------- */
+
+const PLAN_MARK = { done: "\u2713", doing: "\u25B8", blocked: "\u2715", queued: "\u00B7" };
+
+function renderPlan(plan) {
+  const card = document.getElementById("card-plan");
+  if (!card) return;
+  if (!plan || !Array.isArray(plan.tasks) || plan.tasks.length === 0) {
+    card.hidden = true;
+    return;
+  }
+  card.hidden = false;
+
+  const day = document.getElementById("plan-day");
+  if (day) day.textContent = plan.day || "";
+  const goal = document.getElementById("plan-goal");
+  if (goal) goal.textContent = plan.goal || "";
+
+  const list = document.getElementById("plan-tasks");
+  if (list) {
+    list.textContent = "";
+    for (const t of plan.tasks.slice(0, 9)) {
+      const li = document.createElement("li");
+      li.className = `plan-task plan-${t.state || "queued"}`;
+      const mark = document.createElement("span");
+      mark.className = "plan-mark";
+      mark.textContent = PLAN_MARK[t.state] || PLAN_MARK.queued;
+      const label = document.createElement("span");
+      label.className = "plan-label";
+      // textContent throughout: this text comes from the agent, never from markup.
+      label.textContent = t.label || "";
+      li.appendChild(mark);
+      li.appendChild(label);
+      if (t.note) {
+        const note = document.createElement("span");
+        note.className = "plan-note";
+        note.textContent = t.note;
+        li.appendChild(note);
+      }
+      list.appendChild(li);
+    }
+  }
+
+  const blocker = document.getElementById("plan-blocker");
+  if (blocker) {
+    blocker.hidden = !plan.blocker;
+    blocker.textContent = plan.blocker ? `waiting on: ${plan.blocker}` : "";
+  }
+}
+
+async function tickPlan() {
+  if (!needsSnapshot) return;
+  try {
+    const data = await getJson("/api/plan");
+    renderPlan(data && data.plan);
+  } catch {
+    // The studio not answering is already visible everywhere else; keep the last plan on screen.
+  }
+}
+
 function start() {
   applyParts();
   tickEvents();
   tickSnapshot();
+  tickPlan();
   setInterval(tickEvents, POLL_MS);
   setInterval(tickSnapshot, POLL_MS);
+  // The plan changes at day boundaries, not every second.
+  setInterval(tickPlan, POLL_MS * 4);
 }
 
 if (document.readyState === "loading") {

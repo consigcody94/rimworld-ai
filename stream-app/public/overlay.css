@@ -871,3 +871,51 @@ body.is-solo.solo-alerts .alert-layer {
   left: var(--safe);
   right: var(--safe);
 }
+
+
+/* --------------------------------------------------------------------------
+   AI plan card
+   -------------------------------------------------------------------------- */
+
+.card-plan .plan-goal {
+  font-size: 0.82rem;
+  opacity: 0.85;
+  margin-bottom: 0.35rem;
+}
+
+.card-plan .plan-tasks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.15rem;
+}
+
+.card-plan .plan-task {
+  display: grid;
+  grid-template-columns: 1rem 1fr auto;
+  align-items: baseline;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+.card-plan .plan-mark { text-align: center; }
+.card-plan .plan-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-plan .plan-note {
+  font-size: 0.7rem;
+  opacity: 0.6;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.card-plan .plan-done    { color: #72d68a; }
+.card-plan .plan-doing   { color: #ffd24d; }
+.card-plan .plan-blocked { color: #ff7a5c; }
+.card-plan .plan-queued  { opacity: 0.62; }
+
+.card-plan .plan-blocker {
+  margin-top: 0.35rem;
+  font-size: 0.74rem;
+  color: #ff8a66;
+}

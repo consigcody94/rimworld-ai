@@ -31,6 +31,18 @@ namespace RimWorldAIBridge
         private static int mainThreadId = -1;
         private static Pump pump;
 
+        /// <summary>
+        /// Milliseconds since the pump last ran, or -1 if it never has.
+        ///
+        /// The sentinel matters: starting this at zero and subtracting would report a loop that
+        /// has never run as perfectly healthy, which is the exact shape of the bug this field
+        /// exists to catch. An agent reads it to ask whether the game is simulating without
+        /// having to touch game state, which is the one question it cannot otherwise answer about
+        /// itself: a stopped game looks identical to a slow one from inside the loop.
+        /// </summary>
+        private static long lastPumpMs = -1;
+        public static long PumpAgeMs => lastPumpMs < 0 ? -1 : (long)(DateTime.UtcNow - DateTime.MinValue).TotalMilliseconds - lastPumpMs;
+
         /// <summary>Budget per frame for queued work, so a burst of API calls cannot stall rendering.</summary>
         public const double FrameBudgetMs = 12.0;
 
@@ -82,6 +94,19 @@ namespace RimWorldAIBridge
         }
 
         /// <summary>Fire and forget on the main thread.</summary>
+        /// <summary>
+        /// Run a Unity coroutine on the mod's own persistent behaviour.
+        ///
+        /// Downloading an emote image must not block the game thread, and UnityWebRequest is only
+        /// usable from a coroutine, so the pump that already exists for main-thread work doubles
+        /// as the place those downloads live.
+        /// </summary>
+        public static void StartCoroutine(System.Collections.IEnumerator routine)
+        {
+            try { pump?.StartCoroutine(routine); }
+            catch (Exception e) { Log.ErrorOnce("[RimWorldAIBridge] coroutine failed to start: " + e, 7802); }
+        }
+
         public static void Post(Action work)
         {
             queue.Enqueue(new WorkItem { Work = () => { work(); return null; } });
@@ -93,6 +118,7 @@ namespace RimWorldAIBridge
 
             private void Update()
             {
+                lastPumpMs = (long)(DateTime.UtcNow - DateTime.MinValue).TotalMilliseconds;
                 if (!Application.runInBackground)
                 {
                     Application.runInBackground = true;

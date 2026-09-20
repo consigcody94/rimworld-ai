@@ -584,14 +584,45 @@ namespace RimWorldAIBridge
                 return Bridge.Ok("enabled", FollowCamera.Enabled, "target", FollowCamera.Target?.LabelShort, "deadzone", FollowCamera.Deadzone, "zoom", FollowCamera.DesiredZoom, "speed", FollowCamera.SmoothSpeed);
             });
 
-            Doc(s, "ANY", "/chat/push", "Push a live Twitch chat message to the in-game HUD overlay. {user, text, color}", r =>
+            Doc(s, "ANY", "/chat/push", "Push a live Twitch chat message to the in-game HUD. {user, text, color, badges:[{mark,color}], parts:[{text}|{text,url}]}. `parts` carries the message already broken into text runs and emotes by the studio, which is where the Twitch emote tag and the 7TV, BTTV and FFZ name maps live; each emote part gives the image url and its name as `text` so the HUD can show the name while the image is still downloading. Without `parts` the message is drawn as plain text, exactly as before.", r =>
             {
-                string user = r.Arg("user");
-                string text = r.Arg("text");
+                string user = r.Arg("user") ?? "viewer";
+                string text = r.Arg("text") ?? "";
                 string color = r.Arg("color");
-                if (string.IsNullOrEmpty(user) || string.IsNullOrEmpty(text)) throw new BridgeException("Must provide user and text.");
-                TwitchChatHUD.AddMessage(user, text, color);
-                return Bridge.Ok("pushed", true, "user", user, "text", text);
+
+                List<ChatPart> parts = null;
+                var rawParts = Json.List(r.Body, "parts");
+                if (rawParts != null)
+                {
+                    parts = new List<ChatPart>();
+                    foreach (var o in rawParts)
+                    {
+                        var d = o as Dictionary<string, object>;
+                        if (d == null) continue;
+                        if (parts.Count >= 40) break;
+                        parts.Add(new ChatPart { Text = Json.Str(d, "text"), Url = Json.Str(d, "url") });
+                    }
+                }
+
+                List<ChatBadge> badges = null;
+                var rawBadges = Json.List(r.Body, "badges");
+                if (rawBadges != null)
+                {
+                    badges = new List<ChatBadge>();
+                    foreach (var o in rawBadges)
+                    {
+                        var d = o as Dictionary<string, object>;
+                        if (d == null) continue;
+                        if (badges.Count >= 4) break;
+                        var c = Color.white;
+                        var hex = Json.Str(d, "color");
+                        if (!string.IsNullOrEmpty(hex)) ColorUtility.TryParseHtmlString(hex, out c);
+                        badges.Add(new ChatBadge { Mark = Json.Str(d, "mark"), Color = c });
+                    }
+                }
+
+                TwitchChatHUD.AddMessage(user, text, color, parts, badges);
+                return Bridge.Ok("messages", TwitchChatHUD.MessageCount, "emoteTextures", EmoteCache.Count, "emoteFailures", EmoteCache.Failed);
             });
 
             Doc(s, "ANY", "/chat/clear", "Clear in-game Twitch chat HUD messages.", r =>

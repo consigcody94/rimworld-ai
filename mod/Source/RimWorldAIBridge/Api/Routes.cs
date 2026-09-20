@@ -16,7 +16,7 @@ namespace RimWorldAIBridge
     {
         private static readonly List<Dictionary<string, object>> help = new List<Dictionary<string, object>>();
 
-        private static void Doc(HttpServer s, string method, string path, string desc, HttpServer.Handler h)
+        internal static void Doc(HttpServer s, string method, string path, string desc, HttpServer.Handler h)
         {
             help.Add(new Dictionary<string, object> { { "method", method }, { "path", path }, { "desc", desc } });
             // The help text keeps the readable "{idOrName}" form, but the router only ever looks up
@@ -28,6 +28,7 @@ namespace RimWorldAIBridge
         public static void Register(HttpServer s)
         {
             help.Clear();
+            DiagnoseRoutes.Register(s);
             s.Get("/", r => new RawResponse { Bytes = Dashboard.Html(), ContentType = "text/html; charset=utf-8" });
             Doc(s, "GET", "/help", "List every route with a one-line description.", r => new Dictionary<string, object> { { "version", BridgeMod.Version }, { "routes", help } });
             Doc(s, "GET", "/health", "Quick server health check (uptime, requests served, loading state).", r => new Dictionary<string, object>

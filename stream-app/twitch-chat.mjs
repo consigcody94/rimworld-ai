@@ -4,6 +4,8 @@
  * Supports authenticated two-way bot mode and anonymous listener mode (justinfan).
  */
 
+import { EmoteResolver, parseBadges } from "./emotes.mjs";
+
 export class TwitchChatEngine {
   constructor(options = {}) {
     this.channel = (options.channel ?? "").replace(/^#/, "").toLowerCase();
@@ -75,6 +77,15 @@ export class TwitchChatEngine {
       this.send(`PASS ${String(pass).replace(/[\r\n\0]/g, "")}`);
       this.send(`NICK ${String(nick).replace(/[\r\n\0]/g, "")}`);
       this.send("CAP REQ :twitch.tv/tags twitch.tv/commands");
+      // Emote sets, loaded once the connection is up. A failure here costs emotes, never chat.
+      if (!this.emotes) {
+        this.emotes = new EmoteResolver({
+          channel: this.channel,
+          channelId: this.channelId ?? null,
+          log: (m) => console.log(`[TwitchChat] ${m}`),
+        });
+        this.emotes.load().catch(() => {});
+      }
       this.send(`JOIN #${String(this.channel).replace(/[\r\n\0 ]/g, "")}`);
 
       console.log(`[TwitchChat] Joined #${this.channel} as ${nick} (authenticated: ${this.isAuthenticated})`);
@@ -203,6 +214,15 @@ export class TwitchChatEngine {
       const i = kv.indexOf("=");
       return i < 0 ? [kv, ""] : [kv.slice(0, i), kv.slice(i + 1)];
     })) : {};
+    if (!this.channelId && tags["room-id"]) {
+      // Learned from the first message rather than from an API call: the room id is in every
+      // PRIVMSG tag, and it is exactly what the three emote services key a channel set on.
+      this.channelId = tags["room-id"];
+      if (this.emotes && !this.emotes.channelId) {
+        this.emotes.channelId = this.channelId;
+        this.emotes.load().catch(() => {});
+      }
+    }
     const username = tags["display-name"]?.trim() || match[2];
     const message = match[3].trim();
     if (!message) return;
@@ -220,8 +240,21 @@ export class TwitchChatEngine {
     this.broadcastEvent({ type: "chat", ...chatMsg });
 
     // Display viewer chat directly inside RimWorld in-game HUD
+    // The message as the viewer sees it: Twitch's own emotes come already located in the tag,
+    // the third-party ones are matched by name, and the badges say who is speaking. Sending
+    // plain text meant a 7TV emote reached the broadcast as the literal word the viewer typed.
     try {
-      await this.callBridge("POST", "/chat/push", { user: username, text: message, color: tags.color || undefined });
+      this.emotes?.refreshIfStale();
+      const parsed = this.emotes ? this.emotes.parse(message, tags.emotes ?? "") : null;
+      const hasEmote = parsed?.some((p) => p.type === "emote");
+      const badges = parseBadges(tags.badges ?? "");
+      await this.callBridge("POST", "/chat/push", {
+        user: username,
+        text: message,
+        color: tags.color || undefined,
+        parts: hasEmote ? parsed.map((p) => (p.type === "emote" ? { text: p.name, url: p.url } : { text: p.text })) : undefined,
+        badges: badges.length ? badges.map((b) => ({ mark: b.mark, color: b.color })) : undefined,
+      });
     } catch {}
     try {
       await this.callBridge("POST", "/notify", { text: `[Twitch] ${username}: ${message.slice(0, 75)}`, type: "neutral" });

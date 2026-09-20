@@ -373,6 +373,7 @@ export class ColonyAgent {
     // Counts loose logs and steel around the base as well as stockpiled material, because a
     // blueprint is served just as well by a log lying where the tree fell.
     const resources = await this.trueResources(snap);
+    this.lastCounted = resources;
     const day = Math.floor((snap.tick ?? 0) / 60000) + 1;
     if (this.every("built-scan", 6)) {
       try {
@@ -3119,7 +3120,7 @@ export class ColonyAgent {
   printStatus(snap, day, colonists) {
     const r = snap.research;
     const cols = colonists.map((c) => `${c.name}[m${Math.round((c.needs?.mood ?? 0) * 100)} f${Math.round((c.needs?.food ?? 0) * 100)} r${Math.round((c.needs?.rest ?? 0) * 100)} ${c.job?.report ?? "idle"}]`).join(" ");
-    this.log(`T${this.turn} D${day} ${snap.date} | wood ${snap.resources?.WoodLog ?? 0} steel ${snap.resources?.Steel ?? 0} food ${snap.foodNutrition ?? 0} | research ${r ? `${r.label} ${Math.round(r.progress * 100)}%` : "none"} | ${cols}`);
+    this.log(`T${this.turn} D${day} ${snap.date} | wood ${this.lastCounted?.WoodLog ?? snap.resources?.WoodLog ?? 0} steel ${snap.resources?.Steel ?? 0} food ${snap.foodNutrition ?? 0} | research ${r ? `${r.label} ${Math.round(r.progress * 100)}%` : "none"} | ${cols}`);
   }
 }
 
