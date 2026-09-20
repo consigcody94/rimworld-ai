@@ -451,6 +451,7 @@ export class ColonyAgent {
     // priorities already answer the second one, and they answer it every time the colonist picks
     // up a new job rather than once per phase. So the board is kept stocked here unconditionally,
     // and a hungry colonist simply eats before it builds, which is what the priorities are for.
+    await this.equipFoundWeapons(colonists);
     await this.maybeReplan(colonists, snap, resources, threats);
     if (this.every("build", 8)) await this.manageBase(colonists, resources);
 
@@ -2341,6 +2342,47 @@ export class ColonyAgent {
    * An unarmed colony is one raid away from ending. Until every colonist who can fight has a
    * weapon, crafting one outranks building, and finished weapons get equipped immediately.
    */
+  /**
+   * Pick up a weapon that is already lying on the map.
+   *
+   * RimWorld refuses a hunt job to anyone without a ranged weapon, so an unarmed colony cannot
+   * eat meat at all, and the agent's answer to that was always to craft a bow: thirty wood and
+   * several hours at a crafting spot. Meanwhile a short bow was lying twenty cells from the
+   * founder, dropped by whoever left the three corpses nearby, and nothing in this agent ever
+   * looked. A weapon on the ground is free and immediate, and it is the single biggest change to
+   * what the colony can do that costs nothing at all.
+   *
+   * Ranged first, because ranged is what unlocks hunting; melee only if there is nothing better
+   * and the colonist is holding nothing.
+   */
+  async equipFoundWeapons(colonists) {
+    if (!this.every("scavenge-weapons", 25)) return;
+    const unarmed = colonists.filter((c) => !c.weapon && !c.downed && !c.dead);
+    if (unarmed.length === 0) return;
+
+    try {
+      const res = await api.get(`/things?cat=Item&detail=1&rect=${this.base.x - 40},${this.base.z - 40},81,81&limit=300`);
+      const weapons = (res.things ?? [])
+        .filter((t) => t.weapon && t.x != null && !t.forbidden)
+        // A wooden log is flagged IsWeapon by the game. Anything that is also stuff is material.
+        .filter((t) => !/Log|Block|Chunk|Steel|Cloth|Leather/i.test(String(t.def)))
+        .map((t) => ({ ...t, ranged: /bow|gun|rifle|pistol|revolver|shotgun|launcher|bolt/i.test(`${t.def} ${t.label}`) }))
+        .sort((a, b) => (b.ranged - a.ranged) || (dist(a, this.base) - dist(b, this.base)));
+      if (weapons.length === 0) return;
+
+      for (const c of unarmed) {
+        const w = weapons.shift();
+        if (!w) break;
+        await api.tryPost("/allow", { things: [w.id] });
+        const r = await api.tryPost("/job", { pawn: c.id, job: "Equip", targetA: w.id });
+        if (r) {
+          this.stats.orders++;
+          await this.thought(`${c.name} is picking up a ${w.label} lying at ${w.x}, ${w.z}. ${w.ranged ? "A ranged weapon is what makes hunting possible at all." : "Better than bare hands."} Free, and already made.`);
+        }
+      }
+    } catch {}
+  }
+
   async manageWeapons(colonists, resources) {
     const fighters = colonists.filter((c) => !c.downed);
     const unarmed = fighters.filter((c) => !c.weapon);

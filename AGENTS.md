@@ -206,30 +206,34 @@ One real limit, stated plainly: RimWorld draws these through `Texture2D.LoadImag
 emotes, so **animated 7TV emotes cannot be drawn** and the HUD falls back to showing the name the
 viewer typed. That is a deliberate choice: a name is true, a blank gap is not.
 
-### Getting chat fully working
+### Twitch chat is already connected
 
-Reading chat already works with no credentials at all: the bot connects anonymously as
-`justinfan`, which is why viewer messages appear on the in-game HUD. **Posting** needs a token,
-and the token flow needs a Twitch application, which does not exist yet.
+This is done; do not redo it. The Twitch application "RimWorld AI Streamer" exists, its
+`TWITCH_CLIENT_ID` is in `.env`, and the OAuth token is stored, so the bot posts as
+`sonoflilith94` with the scopes `chat:read`, `chat:edit` and `channel:manage:broadcast`. The
+studio also sets the channel title and category on start.
 
-`.env` currently has `TWITCH_CHANNEL` and `TWITCH_STREAM_KEY` set, and
-**`TWITCH_CLIENT_ID`, `TWITCH_BOT_USERNAME` and `TWITCH_BOT_OAUTH` all empty**. The blocker is
-the client id: `/auth/twitch` cannot start an OAuth flow without one.
+Check it rather than assume it:
 
-These steps need the account owner and must not be done by an agent:
+    curl -s -H 'Host: localhost:18888' http://127.0.0.1:18888/api/settings | jq '{hasClientId,hasOauth,botUsername}'
 
-1. At `https://dev.twitch.tv/console/apps`, register an application. OAuth redirect URL
-   `http://localhost:18888/auth/callback`, category Chat Bot.
-2. Copy the **Client ID** into `.env` as `TWITCH_CLIENT_ID=...`.
-3. Restart the studio: `node stream-app/server.mjs`.
-4. Open `http://localhost:18888/auth/twitch` in a browser and log in as whichever account should
-   speak in chat. The requested scopes are `chat:read`, `chat:edit` and
-   `channel:manage:broadcast` (the last one lets the studio set the stream title and category).
-5. Confirm: `curl -s -H 'Host: localhost:18888' http://127.0.0.1:18888/api/settings | jq` should
-   show `hasOauth: true` and `hasClientId: true`.
+Both flags should be true. If `hasOauth` goes false the token has expired, and re-authorising
+means a human opening `http://localhost:18888/auth/twitch` in a browser and signing in. An agent
+cannot do that step and must not try: say so and carry on without chat posting, which costs
+nothing else, because reading chat works anonymously.
 
-Until that is done the AI can read chat and answer on the in-game HUD, but it cannot post a
-message to the channel.
+Send a message with:
+
+    curl -s -X POST -H 'Host: localhost:18888' -H 'Content-Type: application/json' \
+      http://127.0.0.1:18888/api/chat/send -d '{"message":"..."}'
+
+The field is `message`, not `text`. A message beginning with `!` is handled as a command rather
+than posted.
+
+Speak in chat sparingly and only when there is something to say: a colonist joining or dying, a
+raid, a room finished, or an answer to a viewer. Unprompted play-by-play from the streamer's own
+account reads as a bot flooding its own channel, which is why commentary goes to the overlay and
+the in-game HUD instead.
 
 ---
 
