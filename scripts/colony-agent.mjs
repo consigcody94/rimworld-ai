@@ -1583,6 +1583,19 @@ export class ColonyAgent {
    */
   async place(key, def, x, z, opts = {}) {
     if (this.placed.has(key) && !opts.force) return "already";
+
+    // Ask the world, not the ledger.
+    //
+    // `this.placed` is empty after any restart, and the agent restarts often, so every relaunch
+    // re-ordered everything it had already ordered. Because place() tries neighbouring cells
+    // when the target is taken, the duplicate landed one cell over rather than being refused,
+    // and the colony ended up with two campfires, two beds and two of every free spot, each
+    // wanting its own wood and its own hauling trip. This check was written for exactly that and
+    // could never work until blueprints stopped being invisible to /things.
+    if (!opts.allowDuplicate && await this.alreadyHave(def)) {
+      this.placed.set(key, { def, x, z });
+      return "already";
+    }
     const attempts = this.failedPlacements.get(key) ?? 0;
     if (attempts > 6) return false;
 
@@ -1639,7 +1652,12 @@ export class ColonyAgent {
         api.get(`/things?def=Frame_${def}&limit=50`).catch(() => ({})),
       ]);
       const all = [...(done.things ?? []), ...(pending.things ?? []), ...(frames.things ?? [])];
-      return all.some((t) => t.x != null && dist(t, b) < 25);
+      // No base yet, or the thing is further out than expected: having one anywhere on the map
+      // still means the colony has one. The 25-cell leash was silently turning this check off
+      // whenever the base anchor had not loaded, which is every first turn after a restart, and
+      // a restart is exactly when the in-memory ledger is empty and this check is all there is.
+      if (b?.x == null) return all.length > 0;
+      return all.some((t) => t.x != null && dist(t, b) < 60);
     } catch { return false; }
   }
 
