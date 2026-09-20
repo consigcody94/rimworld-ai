@@ -43,7 +43,7 @@ function saveEnv(updates) {
     if (v === undefined || v === null || v === "") continue;
     const line = `${k}=${v}`;
     const regex = new RegExp(`^${k}=.*$`, "m");
-    content = regex.test(content) ? content.replace(regex, line) : `${content.trim()}\n${line}`;
+    content = regex.test(content) ? content.replace(regex, () => line) : `${content.trim()}\n${line}`;
   }
   fs.writeFileSync(ENV_FILE, content.trim() + "\n", "utf-8");
 }
@@ -110,20 +110,43 @@ function sendJson(res, status, data) {
   res.end(JSON.stringify(data));
 }
 
+const MAX_BODY_BYTES = 64 * 1024;
+
+/**
+ * Read a JSON body with a hard size cap. Accumulating a string per chunk both allowed an
+ * unbounded body to exhaust memory and corrupted any UTF-8 sequence split across a chunk.
+ */
 function parseJsonBody(req) {
   return new Promise((resolve, reject) => {
-    let buf = "";
-    req.on("data", (chunk) => (buf += chunk));
+    const chunks = [];
+    let size = 0;
+    req.on("data", (chunk) => {
+      size += chunk.length;
+      if (size > MAX_BODY_BYTES) {
+        const err = new Error("Request body too large");
+        err.statusCode = 413;
+        req.destroy();
+        return reject(err);
+      }
+      chunks.push(chunk);
+    });
     req.on("end", () => {
-      if (!buf) return resolve({});
+      if (size === 0) return resolve({});
       try {
-        resolve(JSON.parse(buf));
+        const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        resolve(parsed && typeof parsed === "object" ? parsed : {});
       } catch (e) {
         reject(e);
       }
     });
     req.on("error", reject);
   });
+}
+
+/** Coerce an untrusted value to a bounded single-line string. */
+function str(v, max = 500) {
+  if (typeof v !== "string") return "";
+  return v.replace(/[\r\n\0]+/g, " ").trim().slice(0, max);
 }
 
 function serveStatic(res, filePath, contentType) {
@@ -137,14 +160,23 @@ function serveStatic(res, filePath, contentType) {
 }
 
 // HTTP Request Handler
+// A single unhandled rejection anywhere would otherwise end a 24/7 broadcast.
+process.on("unhandledRejection", (err) => console.error("[StreamStudio] unhandled rejection:", err));
+process.on("uncaughtException", (err) => console.error("[StreamStudio] uncaught exception:", err));
+
 const server = http.createServer(async (req, res) => {
+  // Loopback only, and the Host header must name loopback too, so a DNS rebinding attack
+  // cannot turn a page the operator visits into a remote control for the broadcast.
+  const host = (req.headers.host ?? "").split(":")[0];
+  if (host && !["localhost", "127.0.0.1", "[::1]", "::1"].includes(host)) {
+    res.writeHead(403, { "Content-Type": "text/plain" });
+    res.end("Forbidden host");
+    return;
+  }
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
   const pathname = url.pathname;
 
   // CORS headers
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
   if (req.method === "OPTIONS") {
     res.writeHead(204);
@@ -217,8 +249,9 @@ const server = http.createServer(async (req, res) => {
     // ------------------------------------------------------------------------
     if (pathname === "/api/thought" && req.method === "POST") {
       const body = await parseJsonBody(req);
-      if (body.text) {
-        agentThoughts.push(body.text);
+      const thought = str(body.text, 400);
+      if (thought) {
+        agentThoughts.push(thought);
         if (agentThoughts.length > 20) agentThoughts.shift();
       }
       return sendJson(res, 200, { ok: true, count: agentThoughts.length });
@@ -232,10 +265,12 @@ const server = http.createServer(async (req, res) => {
     // as a participant in the room while a synthetic voice reads as a narrator over the top.
     if (pathname === "/api/commentary" && req.method === "POST") {
       const body = await parseJsonBody(req);
-      if (!body.event) return sendJson(res, 400, { ok: false, error: "event required" });
+      const event = str(body.event, 80);
+      const detail = str(body.detail, 600);
+      if (!event) return sendJson(res, 400, { ok: false, error: "event required" });
       let text = null;
       try {
-        text = await chatBrain.commentary(body.event, body.detail ?? "", { askChat: Boolean(body.askChat) });
+        text = await chatBrain.commentary(event, detail, { askChat: Boolean(body.askChat) });
       } catch (e) {
         return sendJson(res, 200, { ok: false, error: e.message });
       }
@@ -273,7 +308,7 @@ const server = http.createServer(async (req, res) => {
     // ------------------------------------------------------------------------
     if (pathname === "/api/chat/send" && req.method === "POST") {
       const body = await parseJsonBody(req);
-      const msg = body.message?.trim();
+      const msg = str(body.message, 450);
       if (!msg) return sendJson(res, 400, { ok: false, error: "Empty message" });
 
       if (msg.startsWith("!")) {
@@ -323,7 +358,10 @@ const server = http.createServer(async (req, res) => {
       const updates = [];
 
       if (body.channel !== undefined) {
-        const ch = body.channel.trim();
+        const ch = str(body.channel, 25);
+        if (!/^[a-zA-Z0-9_]{3,25}$/.test(ch)) {
+          return sendJson(res, 400, { ok: false, error: "Channel must be 3 to 25 characters of letters, digits or underscore." });
+        }
         process.env.TWITCH_CHANNEL = ch;
         chatEngine.channel = ch;
         chatEngine.connect();
@@ -398,6 +436,7 @@ const server = http.createServer(async (req, res) => {
       let body = "";
       req.on("data", (c) => (body += c));
       req.on("end", async () => {
+       try {
         const params = new URLSearchParams(body);
         let botUsername = params.get("botUsername")?.trim();
         let oauthToken = params.get("oauthToken")?.trim();
@@ -423,6 +462,10 @@ const server = http.createServer(async (req, res) => {
 
         res.writeHead(302, { Location: "/" });
         res.end();
+       } catch (e) {
+        console.error("[Twitch] save-token failed:", e.message);
+        try { res.writeHead(500, { "Content-Type": "text/plain" }); res.end("Could not save token"); } catch {}
+       }
       });
       return;
     }
@@ -449,7 +492,7 @@ const server = http.createServer(async (req, res) => {
             if (token) {
               fetch("/auth/save-token", {
                 method: "POST",
-                body: new URLSearchParams({ botUsername: "TwitchUser", oauthToken: "oauth:" + token })
+                body: new URLSearchParams({ oauthToken: "oauth:" + token })
               }).then(() => window.location.href = "/");
             } else {
               window.location.href = "/";
@@ -468,7 +511,7 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, "127.0.0.1", () => {
   console.log(`================================================================`);
   console.log(`  🪐 RimWorld AI Stream Studio listening on http://localhost:${PORT}`);
   console.log(`  📺 Live Overlay URL: http://localhost:${PORT}/overlay`);

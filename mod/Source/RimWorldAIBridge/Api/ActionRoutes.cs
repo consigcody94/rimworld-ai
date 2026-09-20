@@ -531,7 +531,7 @@ namespace RimWorldAIBridge
 
             Doc(s, "ANY", "/chat/clear", "Clear in-game Twitch chat HUD messages.", r =>
             {
-                lock (TwitchChatHUD.Messages) TwitchChatHUD.Messages.Clear();
+                TwitchChatHUD.ClearMessages();
                 return Bridge.Ok("cleared", true);
             });
 

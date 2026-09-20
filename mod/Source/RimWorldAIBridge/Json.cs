@@ -146,13 +146,22 @@ namespace RimWorldAIBridge
                 while (Pos < s.Length && char.IsWhiteSpace(s[Pos])) Pos++;
             }
 
+            private int depth;
+            private const int MaxDepth = 64;
+
             public object ReadValue()
             {
                 SkipWs();
                 if (End) throw new FormatException("Unexpected end of JSON");
                 char c = s[Pos];
-                if (c == '{') return ReadObject();
-                if (c == '[') return ReadArray();
+                if (c == '{' || c == '[')
+                {
+                    // A stack overflow cannot be caught in .NET; it takes the whole game down.
+                    // Bound the nesting instead and fail the request cleanly.
+                    if (++depth > MaxDepth) throw new FormatException("JSON nested deeper than " + MaxDepth + " levels");
+                    try { return c == '{' ? ReadObject() : (object)ReadArray(); }
+                    finally { depth--; }
+                }
                 if (c == '"') return ReadString();
                 if (c == 't') { Expect("true"); return true; }
                 if (c == 'f') { Expect("false"); return false; }

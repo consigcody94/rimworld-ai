@@ -20,6 +20,9 @@ namespace RimWorldAIBridge
             public Func<object> Work;
             public object Result;
             public Exception Error;
+            /// <summary>Set when the caller gave up waiting. The pump skips these rather than
+            /// applying an order the client already treated as failed and re-sent.</summary>
+            public volatile bool Abandoned;
             public readonly ManualResetEventSlim Done = new ManualResetEventSlim(false);
         }
 
@@ -61,7 +64,10 @@ namespace RimWorldAIBridge
             var item = new WorkItem { Work = work };
             queue.Enqueue(item);
             if (!item.Done.Wait(timeoutMs))
+            {
+                item.Abandoned = true;
                 throw new TimeoutException("Main thread did not process the request within " + timeoutMs + " ms (is the game frozen or a modal dialog blocking?)");
+            }
             if (item.Error != null)
             {
                 if (item.Error is BridgeException) throw item.Error;
@@ -103,6 +109,9 @@ namespace RimWorldAIBridge
                 sw.Restart();
                 while (queue.TryDequeue(out WorkItem item))
                 {
+                    // The caller already gave up on this one and has very likely re-sent the order.
+                    // Running it now would apply the same order twice, against stale coordinates.
+                    if (item.Abandoned) { item.Done.Dispose(); continue; }
                     try { item.Result = item.Work(); }
                     catch (Exception e) { item.Error = e; }
                     finally { item.Done.Set(); }

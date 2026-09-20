@@ -168,9 +168,10 @@ namespace RimWorldAIBridge
             var res = ctx.Response;
             try
             {
-                res.Headers["Access-Control-Allow-Origin"] = "*";
-                res.Headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Token, X-Agent-Id";
-                res.Headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS";
+                // Deliberately no Access-Control-Allow-Origin. The dashboard is same-origin, and a
+                // wildcard would let any web page the user happens to have open drive the game,
+                // including GET /game/quit, straight off the loopback interface.
+                res.Headers["Vary"] = "Origin";
                 if (ctx.Request.HttpMethod == "OPTIONS") { res.StatusCode = 204; res.Close(); return; }
 
                 var req = Parse(ctx.Request);
@@ -240,7 +241,7 @@ namespace RimWorldAIBridge
                 // Mutating route lock check
                 string agentId = ctx.Request.Headers["X-Agent-Id"] ?? req.Arg("agent");
                 string activeOwner; int remainingSec;
-                if (req.Method != "GET" && !CheckOwner(agentId, out activeOwner, out remainingSec))
+                if (Mutating(req.Path) && !CheckOwner(agentId, out activeOwner, out remainingSec))
                 {
                     WriteJson(res, 423, new Dictionary<string, object>
                     {
@@ -348,6 +349,28 @@ namespace RimWorldAIBridge
                 Log.Warning("[RimWorldAIBridge] request failed: " + e);
                 try { WriteJson(res, 500, new Dictionary<string, object> { { "ok", false }, { "error", e.Message }, { "type", e.GetType().Name } }); } catch { }
             }
+        }
+
+        /// <summary>
+        /// Routes that change game state. The lease is enforced on these regardless of HTTP verb,
+        /// because most of them are registered as ANY and so are reachable over GET with a query
+        /// string, which would otherwise skip the check entirely.
+        /// </summary>
+        private static readonly HashSet<string> ReadOnlyPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "/", "/help", "/health", "/status", "/maps", "/map", "/colony", "/snapshot", "/pawns",
+            "/things", "/things/summary", "/resources", "/alerts", "/events", "/letters", "/quests",
+            "/research", "/grid", "/cell", "/defs", "/screenshot", "/traders", "/trade",
+            "/game/saves", "/agent/owner",
+        };
+
+        public static bool Mutating(string path)
+        {
+            if (ReadOnlyPaths.Contains(path)) return false;
+            // Parameterised read routes: /pawn/{id}, /thing/{id}.
+            if (path.StartsWith("/pawn/", StringComparison.OrdinalIgnoreCase)) return false;
+            if (path.StartsWith("/thing/", StringComparison.OrdinalIgnoreCase)) return false;
+            return true;
         }
 
         private Handler Resolve(Req req)

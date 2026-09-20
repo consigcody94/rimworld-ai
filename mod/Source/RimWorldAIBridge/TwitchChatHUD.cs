@@ -19,7 +19,10 @@ namespace RimWorldAIBridge
     /// </summary>
     public static class TwitchChatHUD
     {
-        public static readonly List<ChatMessageItem> Messages = new List<ChatMessageItem>();
+        private static readonly List<ChatMessageItem> Messages = new List<ChatMessageItem>();
+
+        public static void ClearMessages() { lock (syncLock) Messages.Clear(); }
+        public static int MessageCount { get { lock (syncLock) return Messages.Count; } }
         private static readonly object syncLock = new object();
         public static bool Enabled = true;
 
@@ -33,9 +36,33 @@ namespace RimWorldAIBridge
             new Color(1.0f, 0.6f, 0.3f)    // Orange
         };
 
+        /// <summary>
+        /// Unity rich text is enabled for this label, so viewer text must not be able to carry
+        /// markup. A viewer typing &lt;size=200&gt; or the background colour would otherwise blow out
+        /// the panel or make their message invisible on the live broadcast.
+        /// </summary>
+        private static string Sanitize(string s, int max)
+        {
+            if (string.IsNullOrEmpty(s)) return "";
+            var sb = new System.Text.StringBuilder(Math.Min(s.Length, max));
+            foreach (char c in s)
+            {
+                if (sb.Length >= max) break;
+                if (c == '<') { sb.Append('('); continue; }
+                if (c == '>') { sb.Append(')'); continue; }
+                if (c == '\n' || c == '\r' || c == '\t') { sb.Append(' '); continue; }
+                if (char.IsControl(c)) continue;
+                sb.Append(c);
+            }
+            return sb.ToString();
+        }
+
         public static void AddMessage(string user, string text, string hexColor = null)
         {
             if (string.IsNullOrEmpty(user) || string.IsNullOrEmpty(text)) return;
+            user = Sanitize(user, 25);
+            text = Sanitize(text, 160);
+            if (user.Length == 0 || text.Length == 0) return;
             Color color;
             if (!string.IsNullOrEmpty(hexColor) && ColorUtility.TryParseHtmlString(hexColor, out var parsed))
             {

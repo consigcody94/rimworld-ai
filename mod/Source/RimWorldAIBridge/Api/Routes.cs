@@ -19,7 +19,10 @@ namespace RimWorldAIBridge
         private static void Doc(HttpServer s, string method, string path, string desc, HttpServer.Handler h)
         {
             help.Add(new Dictionary<string, object> { { "method", method }, { "path", path }, { "desc", desc } });
-            if (method == "ANY") s.Any(path, h); else s.Route(method, path, h);
+            // The help text keeps the readable "{idOrName}" form, but the router only ever looks up
+            // the wildcard form, so a parameterised path must be registered as "/pawn/*" or it 404s.
+            string route = System.Text.RegularExpressions.Regex.Replace(path, @"\{[^}]+\}", "*");
+            if (method == "ANY") s.Any(route, h); else s.Route(method, route, h);
         }
 
         public static void Register(HttpServer s)

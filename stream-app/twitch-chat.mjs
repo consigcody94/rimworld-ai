@@ -54,11 +54,10 @@ export class TwitchChatEngine {
       return;
     }
 
-    if (this.ws) {
-      try {
-        this.ws.close();
-      } catch {}
-    }
+    // Detach the old socket's handlers first, or closing it to replace it fires onclose and
+    // schedules another connect, which loops forever once the channel is saved.
+    clearTimeout(this.reconnectTimer);
+    this.retireSocket();
 
     const wsUrl = "wss://irc-ws.chat.twitch.tv:443";
     console.log(`[TwitchChat] Connecting to ${wsUrl} for channel #${this.channel}...`);
@@ -66,34 +65,34 @@ export class TwitchChatEngine {
 
     this.ws.onopen = () => {
       this.connected = true;
+      this.reconnectAttempts = 0;
+      this.authError = null;
       const pass = this.oauthToken ? (this.oauthToken.startsWith("oauth:") ? this.oauthToken : `oauth:${this.oauthToken}`) : "SCHMOOPIE";
       const nick = this.botUsername || `justinfan${Math.floor(10000 + Math.random() * 90000)}`;
       this.isAuthenticated = Boolean(this.oauthToken && this.botUsername);
 
-      this.ws.send(`PASS ${pass}\r\n`);
-      this.ws.send(`NICK ${nick}\r\n`);
-      this.ws.send("CAP REQ :twitch.tv/tags twitch.tv/commands\r\n");
-      this.ws.send(`JOIN #${this.channel}\r\n`);
+      this.send(`PASS ${String(pass).replace(/[\r\n\0]/g, "")}`);
+      this.send(`NICK ${String(nick).replace(/[\r\n\0]/g, "")}`);
+      this.send("CAP REQ :twitch.tv/tags twitch.tv/commands");
+      this.send(`JOIN #${String(this.channel).replace(/[\r\n\0 ]/g, "")}`);
 
       console.log(`[TwitchChat] Joined #${this.channel} as ${nick} (authenticated: ${this.isAuthenticated})`);
       this.broadcastEvent({ type: "connection", connected: true, authenticated: this.isAuthenticated, channel: this.channel });
     };
 
-    this.ws.onmessage = async (event) => {
+    this.ws.onmessage = (event) => {
       const raw = event.data.toString();
-      const lines = raw.split("\r\n");
-      for (const line of lines) {
+      for (const line of raw.split("\r\n")) {
         if (!line) continue;
-        await this.handleIrcLine(line);
+        // Never await here: an unhandled rejection from a chat line would end the broadcast.
+        this.handleIrcLine(line).catch((e) => console.warn(`[TwitchChat] line failed: ${e.message}`));
       }
     };
 
     this.ws.onclose = () => {
       this.connected = false;
-      console.log("[TwitchChat] Connection closed. Reconnecting in 5s...");
       this.broadcastEvent({ type: "connection", connected: false, channel: this.channel });
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = setTimeout(() => this.connect(), 5000);
+      this.scheduleReconnect();
     };
 
     this.ws.onerror = (err) => {
@@ -101,40 +100,111 @@ export class TwitchChatEngine {
     };
   }
 
+  /** Detach handlers before closing, so replacing a socket cannot trigger the reconnect path. */
+  retireSocket() {
+    if (!this.ws) return;
+    try {
+      this.ws.onopen = this.ws.onmessage = this.ws.onerror = this.ws.onclose = null;
+      this.ws.close();
+    } catch {}
+    this.ws = null;
+  }
+
+  scheduleReconnect() {
+    clearTimeout(this.reconnectTimer);
+    this.reconnectAttempts = (this.reconnectAttempts ?? 0) + 1;
+    const delay = Math.min(60000, 2000 * 2 ** Math.min(this.reconnectAttempts - 1, 5));
+    console.log(`[TwitchChat] Reconnecting in ${Math.round(delay / 1000)}s (attempt ${this.reconnectAttempts}).`);
+    this.reconnectTimer = setTimeout(() => this.connect(), delay);
+  }
+
   disconnect() {
     clearTimeout(this.reconnectTimer);
-    if (this.ws) {
-      try {
-        this.ws.close();
-      } catch {}
-      this.ws = null;
-    }
+    this.retireSocket();
     this.connected = false;
   }
 
-  sendChat(message) {
-    if (!this.connected || !this.ws || !this.channel) return;
-    if (!this.isAuthenticated) {
-      console.log(`[TwitchChat (Simulated Reply)]: ${message}`);
-      return;
+  /** Raw frame write. Never call this with untrusted text; use sendChat. */
+  send(line) {
+    if (!this.ws || this.ws.readyState !== 1) return false;
+    try {
+      this.ws.send(`${line}\r\n`);
+      return true;
+    } catch (e) {
+      console.warn(`[TwitchChat] send failed: ${e.message}`);
+      return false;
     }
-    this.ws.send(`PRIVMSG #${this.channel} :${message}\r\n`);
+  }
+
+  /**
+   * Post to chat. Strips CR, LF and NUL so no caller can terminate the IRC line and issue
+   * commands as the bot, caps the length at Twitch's limit, and rate limits to stay under the
+   * 20 messages per 30 seconds that would otherwise get the account muted mid-broadcast.
+   */
+  sendChat(message) {
+    const clean = String(message ?? "").replace(/[\r\n\0]+/g, " ").trim().slice(0, 450);
+    if (!clean || !this.channel) return false;
+
+    const now = Date.now();
+    this.sendTimes = (this.sendTimes ?? []).filter((t) => now - t < 30000);
+    if (this.sendTimes.length >= 18) {
+      this.dropped = (this.dropped ?? 0) + 1;
+      console.warn(`[TwitchChat] Rate limit reached; dropped a message (${this.dropped} total).`);
+      return false;
+    }
+
+    if (!this.connected || !this.isAuthenticated) {
+      console.log(`[TwitchChat (not authenticated, would have said)]: ${clean}`);
+      return false;
+    }
+    if (!this.send(`PRIVMSG #${this.channel} :${clean}`)) return false;
+    this.sendTimes.push(now);
+    return true;
   }
 
   async handleIrcLine(line) {
     if (line.startsWith("PING")) {
-      this.ws.send("PONG :tmi.twitch.tv\r\n");
+      this.send("PONG :tmi.twitch.tv");
+      return;
+    }
+
+    // Twitch asks clients to reconnect periodically; treat it as a normal reconnect.
+    if (/^(:\S+ )?RECONNECT\b/.test(line)) {
+      console.log("[TwitchChat] Server asked us to reconnect.");
+      this.scheduleReconnect();
+      return;
+    }
+
+    // A failed login arrives as a NOTICE, not a close. Without this the client looks connected
+    // forever while every message it sends is silently dropped.
+    const notice = line.match(/^(?:@\S+ )?:tmi\.twitch\.tv NOTICE \S+ :(.+)$/);
+    if (notice) {
+      const text = notice[1];
+      if (/login authentication failed|improperly formatted auth/i.test(text)) {
+        this.authError = text;
+        this.isAuthenticated = false;
+        console.warn(`[TwitchChat] Authentication rejected: ${text}. Falling back to read-only.`);
+      } else {
+        console.log(`[TwitchChat] NOTICE: ${text}`);
+      }
       return;
     }
 
     if (!line.includes("PRIVMSG")) return;
 
-    // Parse Twitch PRIVMSG: :username!username@username.tmi.twitch.tv PRIVMSG #channel :message text
-    const match = line.match(/^:([^!]+)![^ ]+ PRIVMSG #[^ ]+ :(.+)$/);
+    // Twitch prefixes every line with IRCv3 tags once twitch.tv/tags is acknowledged, so the
+    // leading "@tag=value;..." group is optional but must be tolerated. Without it, no real
+    // viewer message ever matches.
+    const match = line.match(/^(?:@(\S+) )?:([^!]+)![^ ]+ PRIVMSG #[^ ]+ :(.*)$/);
     if (!match) return;
 
-    const username = match[1];
-    const message = match[2].trim();
+    const tags = match[1] ? Object.fromEntries(match[1].split(";").map((kv) => {
+      const i = kv.indexOf("=");
+      return i < 0 ? [kv, ""] : [kv.slice(0, i), kv.slice(i + 1)];
+    })) : {};
+    const username = tags["display-name"]?.trim() || match[2];
+    const message = match[3].trim();
+    if (!message) return;
 
     const chatMsg = {
       username,
@@ -150,7 +220,7 @@ export class TwitchChatEngine {
 
     // Display viewer chat directly inside RimWorld in-game HUD
     try {
-      await this.callBridge("POST", "/chat/push", { user: username, text: message });
+      await this.callBridge("POST", "/chat/push", { user: username, text: message, color: tags.color || undefined });
     } catch {}
     try {
       await this.callBridge("POST", "/notify", { text: `[Twitch] ${username}: ${message.slice(0, 75)}`, type: "neutral" });
@@ -215,7 +285,7 @@ export class TwitchChatEngine {
           const list = (snap.colonists ?? [])
             .map((c) => `${c.name} (HP ${Math.round((c.health?.pct ?? 1) * 100)}%, Mood ${Math.round((c.needs?.mood ?? 1) * 100)}%, Job: ${c.job?.report ?? "idle"})`)
             .join(" | ");
-          this.sendChat(`[Colonists] ${list}`);
+          this.sendChat(`[Colonists] ${list}`.slice(0, 480));
           break;
         }
 
@@ -225,11 +295,12 @@ export class TwitchChatEngine {
             return;
           }
           let p = null;
+          let pawnsRes = { pawns: [] };
           try {
             p = await this.callBridge("GET", `/pawn/${encodeURIComponent(args)}`);
           } catch {}
           if (!p || p.ok === false || !p.name) {
-            const pawnsRes = await this.callBridge("GET", "/pawns?detail=true");
+            pawnsRes = await this.callBridge("GET", "/pawns?detail=true");
             p = (pawnsRes.pawns ?? []).find(
               (x) => x.name?.toLowerCase() === args.toLowerCase() || String(x.id) === args
             );
@@ -259,10 +330,12 @@ export class TwitchChatEngine {
           const r = await this.callBridge("GET", "/resources");
           const resObj = r.resources ?? {};
           const text = Object.entries(resObj)
+            .sort((a, b) => (Number(b[1]) || 0) - (Number(a[1]) || 0))
+            .slice(0, 10)
             .map(([k, v]) => `${k}: ${v}`)
             .join(", ");
           const foodText = r.foodNutrition ? ` | Edible Food: ${r.foodNutrition}` : "";
-          this.sendChat(`[Stockpiled Resources] ${text}${foodText}`);
+          this.sendChat(`[Stockpiled Resources] ${text}${foodText}`.slice(0, 480));
           break;
         }
 
@@ -286,7 +359,12 @@ export class TwitchChatEngine {
             this.sendChat(`Usage: !vote <tech name> (e.g. !vote SolarPanels, !vote Gunsmithing)`);
             return;
           }
-          const choice = args.toLowerCase();
+          const choice = args.toLowerCase().replace(/[\r\n\0]/g, " ").trim().slice(0, 40);
+          if (!choice) return;
+          if (!this.votes.has(choice) && this.votes.size >= 12) {
+            this.sendChat(`@${username} The poll already has 12 options. Vote for one of those, or wait for the next poll.`);
+            return;
+          }
           // Remove user from previous votes
           for (const voters of this.votes.values()) {
             voters.delete(username);
@@ -316,7 +394,7 @@ export class TwitchChatEngine {
       }
     } catch (err) {
       console.error(`[TwitchChat] Command error (!${cmd}):`, err.message);
-      this.sendChat(`Error executing !${cmd}: ${err.message}`);
+      this.sendChat(`@${username} !${cmd} could not run just now. Try again in a moment.`);
     }
   }
 

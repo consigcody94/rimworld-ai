@@ -127,7 +127,8 @@ export class ColonyAgent {
     this.foodEmergency = false;
     this.weaponRush = false;
     this.workPlanMode = null;
-    this.scheduleMode = "optimal";
+    this.appliedSchedule = new Map();  // pawn id -> schedule preset last applied
+    this.helpless = false;
     this.skillCache = new Map();
     this.stats = { turns: 0, combatTurns: 0, orders: 0, errors: 0 };
   }
@@ -238,7 +239,8 @@ export class ColonyAgent {
     const threats = this.activeThreats(colonists, hostiles);
     if (threats.length > 0) {
       await this.combatTurn(colonists, threats, snap);
-      return true;
+      // A helpless colony should not spin at combat cadence; pace it like peacetime.
+      return !this.helpless;
     }
     if (this.inCombat) await this.endCombat(colonists);
 
@@ -445,6 +447,22 @@ export class ColonyAgent {
   async combatTurn(colonists, threats, snap) {
     this.stats.combatTurns++;
     const able = colonists.filter((c) => !c.downed && (c.health?.pct ?? 1) > 0.15);
+
+    // Nobody can act. Holding the game at speed 1 here just makes downed colonists bleed out in
+    // real time while the agent issues nothing, so hand the clock back and stop re-entering
+    // combat mode until someone is on their feet.
+    if (able.length === 0) {
+      if (!this.helpless) {
+        this.helpless = true;
+        this.log(`COMBAT no able colonists; releasing the clock and waiting for recovery.`);
+        await this.thought(`Every colonist is down or too hurt to fight. Nothing left to order. Letting the clock run and hoping someone gets up.`);
+        await this.narrate("helpless", "colony incapacitated", `All ${colonists.length} colonist(s) are downed or under 15 percent health with ${threats.length} hostile(s) still on the map.`, 0, { priority: "high" });
+      }
+      await api.tryPost("/speed", { speed: this.speed });
+      this.inCombat = false;
+      return;
+    }
+    this.helpless = false;
     const armed = able.filter((c) => c.weapon);
     const posture = this.decidePosture(colonists, threats);
     // Posture is sticky for a fight: flip-flopping between fleeing and fighting is the worst option.
@@ -521,6 +539,7 @@ export class ColonyAgent {
       if (!this.configured.has(c.id)) {
         await api.tryPost("/pawn/settings", { pawn: c.id, selfTend: true, medicalCare: "Best", hostility: "Attack" });
         await api.tryPost("/pawn/schedule", { pawn: c.id, preset: "optimal" });
+        this.appliedSchedule.set(c.id, "optimal");
         this.configured.add(c.id);
       }
 
@@ -537,12 +556,25 @@ export class ColonyAgent {
         await this.thought(`${c.name} is at ${Math.round(food * 100)}% food; recreation window cut short and back on the work timetable.`);
       }
 
-      // Starving colonists do not get to sleep through the daylight hours. Once there is food
-      // again the normal timetable comes back.
-      if (this.foodEmergency && !this.joyMode.has(c.id) && this.scheduleMode !== "work") {
-        await api.tryPost("/pawn/schedule", { pawn: c.id, preset: "work" });
-      } else if (!this.foodEmergency && this.scheduleMode === "work" && !this.joyMode.has(c.id)) {
-        await api.tryPost("/pawn/schedule", { pawn: c.id, preset: "optimal" });
+      // Starving colonists do not get to sleep through the daylight hours. Tracked per pawn
+      // against what was last applied, so the order is sent once per transition rather than
+      // never (the previous version compared two variables that always moved together).
+      if (!this.joyMode.has(c.id)) {
+        const want = this.foodEmergency ? "work" : "optimal";
+        if (this.appliedSchedule.get(c.id) !== want) {
+          await api.tryPost("/pawn/schedule", { pawn: c.id, preset: want });
+          this.appliedSchedule.set(c.id, want);
+        }
+      }
+
+      // Rule 0: bleeding out is faster than starving, so a serious injury is handled even when
+      // the pawn is also hungry. The hunger branch below returns early, which used to skip this.
+      const seriouslyHurt = (h.bleedRate ?? 0) > 0.15 || (h.needsTending && (h.pct ?? 1) < 0.6);
+      if (seriouslyHurt && !c.inBed && !c.drafted && !this.inCombat && this.every(`bedrest-${c.id}`, 60)) {
+        const bed = await this.nearestBed(c);
+        if (bed) { await api.tryPost("/job", { pawn: c.id, job: "LayDown", targetA: bed.id }); this.stats.orders++; }
+        await this.thought(`${c.name} is hurt (${Math.round((h.pct ?? 1) * 100)}% health, bleed ${h.bleedRate ?? 0}); bed rest and self tending.`);
+        await this.narrate(`hurt-${c.id}`, "colonist injured", `${c.name} is at ${Math.round((h.pct ?? 1) * 100)} percent health with a bleed rate of ${h.bleedRate ?? 0}. Ordering bed rest and self tending.`, 240000);
       }
 
       // Rule 1: a hungry pawn eats before anything else. Never send a starving pawn to bed.
@@ -570,15 +602,6 @@ export class ColonyAgent {
         continue;
       }
 
-      // Rule 2: serious bleeding or a real injury gets one bed-rest order, not one per turn.
-      const seriouslyHurt = (h.bleedRate ?? 0) > 0.15 || (h.needsTending && (h.pct ?? 1) < 0.6);
-      if (seriouslyHurt && !c.inBed && !c.drafted && !this.inCombat && this.every(`bedrest-${c.id}`, 60)) {
-        const bed = await this.nearestBed(c);
-        if (bed) { await api.tryPost("/job", { pawn: c.id, job: "LayDown", targetA: bed.id }); this.stats.orders++; }
-        await this.thought(`${c.name} is hurt (${Math.round((h.pct ?? 1) * 100)}% health, bleed ${h.bleedRate ?? 0}); one round of bed rest and self tending.`);
-        await this.narrate(`hurt-${c.id}`, "colonist injured", `${c.name} is at ${Math.round((h.pct ?? 1) * 100)} percent health, bleed rate ${h.bleedRate ?? 0}. Ordering bed rest and self tending.`, 240000);
-      }
-
       // Rule 3: exhaustion outside the sleep window, once.
       if (rest < 0.1 && !c.asleep && !c.inBed && !c.drafted && this.every(`exhausted-${c.id}`, 60)) {
         const bed = await this.nearestBed(c);
@@ -589,11 +612,14 @@ export class ColonyAgent {
       if (!this.joyMode.has(c.id) && mood < threshold + 0.02 && joy < 0.45 && !this.inCombat) {
         this.joyMode.set(c.id, this.turn);
         await api.tryPost("/pawn/schedule", { pawn: c.id, preset: "joy" });
+        this.appliedSchedule.set(c.id, "joy");
         await this.thought(`${c.name} mood ${Math.round(mood * 100)}% at break threshold ${Math.round(threshold * 100)}%. Short recreation window.`);
         await this.narrate(`mood-${c.id}`, "mood crisis", `${c.name} mood ${Math.round(mood * 100)} percent against a break threshold of ${Math.round(threshold * 100)} percent, joy ${Math.round(joy * 100)} percent. Switching them to a recreation schedule.`, 240000, { askChat: true });
       } else if (this.joyMode.has(c.id) && (mood > threshold + 0.08 || this.turn - this.joyMode.get(c.id) > 45)) {
         this.joyMode.delete(c.id);
-        await api.tryPost("/pawn/schedule", { pawn: c.id, preset: "optimal" });
+        const back = this.foodEmergency ? "work" : "optimal";
+        await api.tryPost("/pawn/schedule", { pawn: c.id, preset: back });
+        this.appliedSchedule.set(c.id, back);
       }
     }
   }
@@ -637,10 +663,18 @@ export class ColonyAgent {
 
   async nearestBed(c) {
     try {
+      // `def` on /things is a substring match, so this returns Bed, DoubleBed, RoyalBed and
+      // HospitalBed. Exclude animal beds rather than anchoring the pattern, which used to throw
+      // away exactly the good beds a colony upgrades to.
       const beds = await api.get("/things?cat=Building&player=1&def=Bed");
       const spots = await api.get("/things?cat=Building&player=1&def=SleepingSpot");
-      const all = [...(beds.things ?? []), ...(spots.things ?? [])].filter((t) => /^(Bed|SleepingSpot|Bedroll)/.test(t.def ?? ""));
-      all.sort((a, b) => dist(a, c) - dist(b, c));
+      const all = [...(beds.things ?? []), ...(spots.things ?? [])]
+        .filter((t) => /bed|sleepingspot|bedroll/i.test(t.def ?? "") && !/animal/i.test(t.def ?? ""));
+      // Prefer a medical bed for someone who needs tending, then the nearest.
+      all.sort((a, b) => {
+        const med = (t) => (/hospital/i.test(t.def ?? "") || t.medical ? 0 : 1);
+        return (med(a) - med(b)) || (dist(a, c) - dist(b, c));
+      });
       return all[0] ?? null;
     } catch { return null; }
   }
@@ -664,12 +698,10 @@ export class ColonyAgent {
     // there is a buffer again. Restored as soon as the colony has a few days of food.
     if (starving && !this.foodEmergency) {
       this.foodEmergency = true;
-      this.scheduleMode = "work";
       await this.syncWorkPlan(colonists);
       await this.thought("Food emergency. Hunting, growing and cooking outrank every other job until we have a buffer.");
     } else if (this.foodEmergency && days > 2.5) {
       this.foodEmergency = false;
-      this.scheduleMode = "optimal";
       await this.syncWorkPlan(colonists);
       await this.thought("Food buffer restored. Back to the normal work plan.");
     }
@@ -776,9 +808,18 @@ export class ColonyAgent {
   // ---------------------------------------------------------------- base
 
   /** Place a blueprint once. Retries nearby cells if the spot is blocked. */
-  /** Returns "placed" on a fresh placement, "already" if done earlier, false if it could not be placed. */
+  /**
+   * Returns "placed" on a fresh placement, "already" if the ledger says it was done earlier,
+   * false if it could not be placed. Pass { force: true } when the caller has already checked
+   * the world and knows the structure is missing, otherwise a burned-down campfire is never
+   * rebuilt because the ledger still remembers placing one.
+   */
   async place(key, def, x, z, opts = {}) {
-    if (this.placed.has(key)) return "already";
+    if (this.placed.has(key) && !opts.force) return "already";
+    if (opts.force) {
+      this.placed.delete(key);
+      this.failedPlacements.delete(key);
+    }
     const attempts = this.failedPlacements.get(key) ?? 0;
     if (attempts > 6) return false;
     const offsets = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1], [2, 0], [0, 2], [-2, 0], [0, -2]];
@@ -807,12 +848,12 @@ export class ColonyAgent {
 
     // A butcher spot costs nothing and unlocks the whole meat supply chain.
     if (!built.has("ButcherSpot") && !built.has("TableButcher")) {
-      await this.place("butcherspot", "ButcherSpot", b.x + 6, b.z - 2);
+      await this.place("butcherspot", "ButcherSpot", b.x + 6, b.z - 2, { force: true });
     }
 
     // Campfire first: warmth, light, cooking. 20 wood.
     if (wood >= 20 && !built.has("Campfire")) {
-      if ((await this.place("campfire", "Campfire", b.x - 1, b.z - 1)) === "placed") {
+      if ((await this.place("campfire", "Campfire", b.x - 1, b.z - 1, { force: true })) === "placed") {
         await this.thought("Campfire blueprint down: warmth, light and simple meals.");
       }
     }
@@ -830,26 +871,32 @@ export class ColonyAgent {
       }
       items.push({ def: "Door", stuff: "WoodLog", x: b.x, z: b.z - 3 });
       const r = await api.tryPost("/build/bulk", { items });
-      if (r) {
+      // /build/bulk reports per-item outcomes inside `results` and returns ok even when every
+      // blueprint was rejected. Recording the hut as built on a total failure permanently gates
+      // the growing zones, traps and research bench behind a structure that does not exist.
+      const landed = (r?.results ?? []).filter((x) => x && x.ok !== false).length;
+      if (r && landed >= Math.ceil(items.length * 0.6)) {
         this.placed.set("hut", { def: "Wall", x: b.x, z: b.z });
         this.stats.orders++;
-        await this.thought("Founder's hut walls and door placed. 7x7, wood, door facing south.");
-        await this.narrate("hut", "shelter started", `Seven by seven wooden hut blueprinted at the base with a south door, using part of the ${wood} wood stockpiled.`, 0, { priority: "high" });
+        await this.thought(`Founder's hut: ${landed} of ${items.length} wall and door blueprints placed.`);
+        await this.narrate("hut", "shelter started", `Seven by seven wooden hut blueprinted at the base with a south door, ${landed} of ${items.length} cells accepted, using part of the ${wood} wood stockpiled.`, 0, { priority: "high" });
+      } else if (r) {
+        this.log(`Hut placement rejected: only ${landed} of ${items.length} blueprints landed. Will retry.`);
       }
     }
 
     // Bed, table, chair: the three biggest early mood fixes.
-    if (wood >= 45 && !built.has("Bed")) await this.place("bed", "Bed", b.x - 1, b.z + 1, { stuff: "WoodLog", rot: 0 });
+    if (wood >= 45 && !built.has("Bed")) await this.place("bed", "Bed", b.x - 1, b.z + 1, { stuff: "WoodLog", rot: 0, force: true });
     if (wood >= 30 && !built.has("Table1x2c") && !built.has("Table2x2c")) {
-      if ((await this.place("table", "Table1x2c", b.x + 1, b.z + 1, { stuff: "WoodLog", rot: 0 })) === "placed") {
+      if ((await this.place("table", "Table1x2c", b.x + 1, b.z + 1, { stuff: "WoodLog", rot: 0, force: true })) === "placed") {
         await this.thought("Dining table placed. No more eating on the floor.");
       }
     }
-    if (wood >= 25 && !built.has("Stool") && !built.has("DiningChair")) await this.place("stool", "Stool", b.x + 1, b.z, { stuff: "WoodLog" });
+    if (wood >= 25 && !built.has("Stool") && !built.has("DiningChair")) await this.place("stool", "Stool", b.x + 1, b.z, { stuff: "WoodLog", force: true });
 
     // Recreation.
     if (wood >= 30 && !built.has("HorseshoesPin")) {
-      if ((await this.place("horseshoes", "HorseshoesPin", b.x - 6, b.z, { stuff: "WoodLog" })) === "placed") {
+      if ((await this.place("horseshoes", "HorseshoesPin", b.x - 6, b.z, { stuff: "WoodLog", force: true })) === "placed") {
         await this.thought("Horseshoe pin placed for recreation.");
       }
     }
@@ -902,7 +949,8 @@ export class ColonyAgent {
       }
       prisonItems.push({ def: "Door", stuff: "WoodLog", x: px, z: pz - 2 });
       const r = await api.tryPost("/build/bulk", { items: prisonItems });
-      if (r) {
+      const landedPrison = (r?.results ?? []).filter((x) => x && x.ok !== false).length;
+      if (r && landedPrison >= Math.ceil(prisonItems.length * 0.6)) {
         this.placed.set("prison_hut", { def: "Wall", x: px, z: pz });
         await this.place("prison_bed", "Bed", px, pz, { stuff: "WoodLog", rot: 0 });
         await this.thought("Prisoner hut and bed placed for recruitment.");
@@ -911,7 +959,7 @@ export class ColonyAgent {
 
     // Research bench when the materials exist.
     if (wood >= 100 && steel >= 25 && !built.has("SimpleResearchBench")) {
-      if ((await this.place("research", "SimpleResearchBench", b.x + 6, b.z - 2, { stuff: "WoodLog", rot: 0 })) === "placed") {
+      if ((await this.place("research", "SimpleResearchBench", b.x + 8, b.z - 2, { stuff: "WoodLog", rot: 0, force: true })) === "placed") {
         await this.thought("Research bench placed. The climb out of the stone age starts here.");
         await this.narrate("bench", "research bench started", `Simple research bench blueprinted. Wood ${wood}, steel ${steel}. The climb out of the neolithic starts now.`, 0, { priority: "high", askChat: true });
       }
@@ -1126,10 +1174,18 @@ export class ColonyAgent {
 
   async applyWorkPlan(colonists, reason) {
     for (const p of colonists) {
-      let skills = this.skillCache?.get(p.id);
-      if (!skills) {
-        try { const d = await api.get(`/pawn/${p.id}`); skills = d.skills ?? {}; } catch { skills = {}; }
-        (this.skillCache ??= new Map()).set(p.id, skills);
+      // Only cache a real answer: caching {} on a failed lookup used to pin every colonist to
+      // the pessimistic branch of the work plan for the rest of the run.
+      let skills = this.skillCache.get(p.id);
+      if (!skills || Object.keys(skills).length === 0) {
+        try {
+          const d = await api.get(`/pawn/${p.id}`);
+          skills = d.skills ?? {};
+          if (Object.keys(skills).length > 0) this.skillCache.set(p.id, skills);
+        } catch (e) {
+          this.log(`Could not read skills for ${p.name}: ${e.message}`);
+          skills = {};
+        }
       }
       await api.tryPost("/work/bulk", { pawn: p.id, priorities: this.workPlan(skills, colonists) });
     }
@@ -1207,7 +1263,10 @@ export class ColonyAgent {
     }
     const safe = find(/close|ok|dismiss|postpone|later|acknowledge/);
     if (safe) return safe.index;
-    return enabled[0].index;
+    // Nothing recognised. RimWorld routinely puts the consequential option first, and this
+    // agent has no idea which choices are destructive, so decline to choose and let the caller
+    // dismiss the letter instead. Dismissing can be revisited; choosing cannot.
+    return null;
   }
 
   // ---------------------------------------------------------------- presentation

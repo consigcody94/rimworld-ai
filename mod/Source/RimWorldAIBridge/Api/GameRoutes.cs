@@ -40,6 +40,7 @@ namespace RimWorldAIBridge
             Doc(s, "ANY", "/game/new", "Start a new game without the UI. {scenario:NakedBrutality, storyteller:Cassandra, difficulty:Rough, mapSize:250, seed:'abc', planetCoverage:0.3, biome:TemperateForest, hilliness:LargeHills, permadeath:true, neolithic:true, curatePawn:true, colonyName}. Takes ~1-2 min; poll /status.", r =>
             {
                 if (Current.ProgramState == ProgramState.Playing) throw new BridgeException("A game is running. POST /game/menu first (or /game/save then /game/menu).", 409);
+                RestorePlayerTechLevel();
                 if (LongEventHandler.AnyEventNowOrWaiting) throw new BridgeException("Game is busy loading; wait and retry.", 409);
                 var scen = Lookup.Def<ScenarioDef>(r.Arg("scenario") ?? "NakedBrutality", "ScenarioDef");
                 var story = Lookup.Def<StorytellerDef>(r.Arg("storyteller") ?? "Cassandra", "StorytellerDef");
@@ -118,21 +119,30 @@ namespace RimWorldAIBridge
                     //    so the start stays a legitimate random roll, just a well chosen one.
                     if (curatePawn && Find.GameInitData.startingAndOptionalPawns != null && Find.GameInitData.startingAndOptionalPawns.Count > 0)
                     {
+                        // Roll repeatedly and KEEP the best pawn seen. The previous version compared
+                        // each roll against a best it had just raised to that same roll, and on
+                        // exhaustion kept whatever the final RandomizePawn produced, which could be
+                        // a disqualified pawn worse than hundreds already discarded.
+                        Pawn bestPawn = null;
                         float best = float.MinValue;
-                        const int calibration = 150, maxRolls = 800;
+                        const int minRolls = 120, maxRolls = 600;
+                        const float goodEnough = 70f;
                         int rolls = 0;
                         for (; rolls < maxRolls; rolls++)
                         {
                             var p = Find.GameInitData.startingAndOptionalPawns[0];
                             float score = FounderScore(p);
-                            if (score > best) best = score;
-                            if (rolls >= calibration && score > 0f && score >= best * 0.92f) break;
-                            StartingPawnUtility.RandomizePawn(0);
+                            if (score > best) { best = score; bestPawn = p; }
+                            if (rolls >= minRolls && score >= goodEnough) break;
+                            if (rolls < maxRolls - 1) StartingPawnUtility.RandomizePawn(0);
                         }
-                        var chosen = Find.GameInitData.startingAndOptionalPawns[0];
-                        LastFounderScore = FounderScore(chosen);
+                        if (bestPawn != null && !ReferenceEquals(bestPawn, Find.GameInitData.startingAndOptionalPawns[0]))
+                        {
+                            Find.GameInitData.startingAndOptionalPawns[0] = bestPawn;
+                        }
+                        LastFounderScore = best;
                         LastFounderRolls = rolls;
-                        Log.Message("[RimWorldAIBridge] founder curated after " + rolls + " rolls, score " + LastFounderScore.ToString("F0") + ": " + chosen?.LabelShort);
+                        Log.Message("[RimWorldAIBridge] founder curated from " + rolls + " rolls, best score " + best.ToString("F0") + ": " + (bestPawn?.LabelShort ?? "none"));
                     }
 
                     Find.Scenario.PreMapGenerate();
@@ -158,6 +168,7 @@ namespace RimWorldAIBridge
 
             Doc(s, "ANY", "/game/menu", "Quit to the main menu (does not save).", r =>
             {
+                RestorePlayerTechLevel();
                 if (Current.ProgramState != ProgramState.Playing) return Bridge.Ok("alreadyAtMenu", true);
                 GenScene.GoToMainMenu();
                 return Bridge.Ok("goingToMenu", true);
@@ -186,6 +197,18 @@ namespace RimWorldAIBridge
 
         public static string PendingColonyName;
         public static bool PendingNeolithicTech;
+        public static RimWorld.TechLevel? OriginalPlayerTechLevel;
+        public static RimWorld.FactionDef MutatedPlayerFactionDef;
+
+        /// <summary>Undo the neolithic Def mutation. Called when a game ends.</summary>
+        public static void RestorePlayerTechLevel()
+        {
+            if (OriginalPlayerTechLevel == null || MutatedPlayerFactionDef == null) return;
+            try { MutatedPlayerFactionDef.techLevel = OriginalPlayerTechLevel.Value; } catch { }
+            OriginalPlayerTechLevel = null;
+            MutatedPlayerFactionDef = null;
+        }
+
         public static float LastFounderScore;
         public static int LastFounderRolls;
 

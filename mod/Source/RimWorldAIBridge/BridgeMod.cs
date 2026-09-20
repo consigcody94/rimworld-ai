@@ -116,7 +116,16 @@ namespace RimWorldAIBridge
             {
                 try
                 {
-                    RimWorld.Faction.OfPlayer.def.techLevel = RimWorld.TechLevel.Neolithic;
+                    // FactionDef is process-global and is not saved with the game, so remember the
+                    // original and put it back when this game ends. Without that, a later
+                    // non-neolithic game in the same session silently starts neolithic too.
+                    var def = RimWorld.Faction.OfPlayer.def;
+                    if (Routes.OriginalPlayerTechLevel == null)
+                    {
+                        Routes.OriginalPlayerTechLevel = def.techLevel;
+                        Routes.MutatedPlayerFactionDef = def;
+                    }
+                    def.techLevel = RimWorld.TechLevel.Neolithic;
                 }
                 catch {}
                 Routes.PendingNeolithicTech = false;

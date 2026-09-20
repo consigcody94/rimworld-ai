@@ -186,6 +186,7 @@ export class StreamEngine {
       "-y",
       // ---- video input: raw BGRA from capture-window on stdin ----
       "-thread_queue_size", "512",
+      "-use_wallclock_as_timestamps", "1",
       "-f", "rawvideo",
       "-pixel_format", "bgra",
       "-video_size", `${width}x${height}`,
@@ -193,6 +194,7 @@ export class StreamEngine {
       "-i", "pipe:0",
       // ---- audio input: system audio from ScreenCaptureKit, never the microphone ----
       "-thread_queue_size", "512",
+      "-use_wallclock_as_timestamps", "1",
       "-f", "f32le",
       "-ar", String(AUDIO_RATE),
       "-ac", String(AUDIO_CHANNELS),
@@ -235,25 +237,30 @@ export class StreamEngine {
     return args;
   }
 
-  /** Spawns capture + ffmpeg. Used by start() and by the auto-restart path. */
-  launch(key, testFile) {
-    // Canvas geometry is fixed by the capture binary; --dims is the source of truth.
+  /**
+   * Ask the capture binary for its canvas size, once per process. It prints two compile-time
+   * constants, and calling it synchronously on the /api/stream/start request path used to block
+   * the event loop, and every other connection with it, for up to five seconds.
+   */
+  static canvasDims() {
+    if (StreamEngine._dims) return StreamEngine._dims;
     let width = CANVAS_WIDTH;
     let height = CANVAS_HEIGHT;
     try {
       const out = execFileSync(CAPTURE_BIN, ["--dims"], { encoding: "utf8", timeout: 5000 }).trim();
-      const parts = out.split(/\s+/);
-      if (parts.length >= 2) {
-        const w = parseInt(parts[0], 10);
-        const h = parseInt(parts[1], 10);
-        if (w > 200 && h > 200) {
-          width = w;
-          height = h;
-        }
-      }
+      const [w, h] = out.split(/\s+/).map((n) => parseInt(n, 10));
+      if (w > 200 && h > 200) { width = w; height = h; }
     } catch (e) {
-      console.warn(`[StreamEngine] Warning: --dims failed, using ${width}x${height}: ${e.message}`);
+      console.warn(`[StreamEngine] --dims failed, using ${width}x${height}: ${e.message}`);
     }
+    StreamEngine._dims = { width, height };
+    return StreamEngine._dims;
+  }
+
+  /** Spawns capture + ffmpeg. Used by start() and by the auto-restart path. */
+  launch(key, testFile) {
+    // Canvas geometry is fixed by the capture binary; --dims is the source of truth.
+    const { width, height } = StreamEngine.canvasDims();
 
     console.log(
       `[StreamEngine] Output canvas: ${width}x${height} @ ${this.fps}fps, ` +
@@ -284,18 +291,16 @@ export class StreamEngine {
     // 2. FFmpeg: raw video on pipe:0, raw PCM on pipe:3, VideoToolbox H.264 + AAC.
     const args = this.buildFfmpegArgs({ width, height, outputFormat, target });
 
+    // 3. Hand the capture process's own pipe ends to ffmpeg as its stdin and fd 3. At
+    //    1920x1080x4 bytes x 30 fps that is roughly 248 MB/s, which must never be copied through
+    //    the JS event loop: doing so starved the HTTP server that serves the overlay and made
+    //    the encoder stutter. Passing the streams here makes the kernel move the bytes instead.
+    if (!audioPipe) console.warn("[StreamEngine] Warning: audio pipe unavailable; stream will have no audio.");
     console.log(`[StreamEngine] Spawning FFmpeg (h264_videotoolbox + aac, no microphone input)...`);
-    this.child = spawn("ffmpeg", args, { stdio: ["pipe", "pipe", "pipe", "pipe"] });
-
-    // 3. Wire the two media pipes.
+    this.child = spawn("ffmpeg", args, {
+      stdio: ["pipe", "pipe", "pipe", audioPipe ?? "ignore"],
+    });
     this.captureChild.stdout.pipe(this.child.stdin);
-    if (audioPipe && this.child.stdio[3]) {
-      audioPipe.pipe(this.child.stdio[3]);
-      audioPipe.on("error", () => {});
-      this.child.stdio[3].on("error", () => {});
-    } else {
-      console.warn("[StreamEngine] Warning: audio pipe unavailable; stream will have no audio.");
-    }
     this.captureChild.stdout.on("error", () => {});
     this.child.stdin.on("error", () => {});
 
@@ -320,15 +325,28 @@ export class StreamEngine {
 
     // 5. FFmpeg progress lines -> stats.
     let stderrBuf = "";
+    this.stats.lastFfmpegLines = [];
     this.child.stderr.on("data", (chunk) => {
       stderrBuf += chunk.toString();
-      const lines = stderrBuf.split("\r");
-      if (lines.length > 1) {
-        stderrBuf = lines[lines.length - 1];
-        const lastLine = lines[lines.length - 2];
-        this.parseFfmpegStats(lastLine);
+      if (stderrBuf.length > 65536) stderrBuf = stderrBuf.slice(-16384);
+      // ffmpeg writes its progress line with \r and everything else, including every real
+      // error, with \n. The old parser only ever looked at \r segments, so a bad stream key or
+      // a refused RTMP handshake surfaced as nothing but an exit code.
+      const parts = stderrBuf.split(/(?<=[\r\n])/);
+      stderrBuf = parts.pop() ?? "";
+      for (const raw of parts) {
+        const line = raw.trim();
+        if (!line) continue;
+        if (line.startsWith("frame=")) {
+          this.parseFfmpegStats(line);
+          continue;
+        }
+        this.stats.lastFfmpegLines.push(line);
+        if (this.stats.lastFfmpegLines.length > 20) this.stats.lastFfmpegLines.shift();
+        if (/error|failed|invalid|unable|denied|refused|unknown encoder|no such/i.test(line)) {
+          console.error(`[ffmpeg] ${line}`);
+        }
       }
-      if (stderrBuf.length > 65536) stderrBuf = stderrBuf.slice(-4096);
     });
 
     this.child.on("close", (code) => {
@@ -453,6 +471,14 @@ export class StreamEngine {
     this.emitStats();
   }
 
+  /** A stream that has been healthy for a while has earned its restart budget back. */
+  noteHealthy() {
+    if (this.stats.running && this.restartCount > 0 && this.stats.startedAt && Date.now() - this.stats.startedAt > 300000) {
+      this.restartCount = 0;
+      this.stats.restartCount = 0;
+    }
+  }
+
   parseFfmpegStats(line) {
     const frameMatch = line.match(/frame=\s*(\d+)/);
     const fpsMatch = line.match(/fps=\s*([\d.]+)/);
@@ -466,6 +492,7 @@ export class StreamEngine {
     if (bitrateMatch) this.stats.bitrate = bitrateMatch[1];
     if (speedMatch) this.stats.speed = speedMatch[1];
 
+    this.noteHealthy();
     this.emitStats();
   }
 

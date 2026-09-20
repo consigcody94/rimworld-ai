@@ -29,7 +29,6 @@ namespace RimWorldAIBridge
         private static readonly HashSet<int> seenLetters = new HashSet<int>();
         private static readonly HashSet<Message> seenMessages = new HashSet<Message>();
         private static readonly HashSet<LogEntry> seenLog = new HashSet<LogEntry>();
-        private static int lastPlayLogCount = -1, lastBattleCount = -1;
         private static FieldInfo liveMessagesField;
         private static Game seenGame;
 
@@ -98,7 +97,11 @@ namespace RimWorldAIBridge
                     var t = Lookup.PrimaryTarget(l.lookTargets);
                     Add("letter", Lookup.Truncate(text ?? l.Label.RawText, 600), l.Label.RawText, t?.x, t?.z, l.ID);
                 }
-                if (seenLetters.Count > 5000) seenLetters.Clear();
+                if (seenLetters.Count > 5000)
+                {
+                    seenLetters.Clear();
+                    foreach (var l in Find.LetterStack.LettersListForReading) seenLetters.Add(l.ID);
+                }
 
                 var live = liveMessagesField?.GetValue(null) as List<Message>;
                 if (live != null)
@@ -113,30 +116,36 @@ namespace RimWorldAIBridge
                     if (seenMessages.Count > 200) { seenMessages.Clear(); foreach (var m in live) seenMessages.Add(m); }
                 }
 
+                // Scan the tail every poll rather than gating on Count. These logs are capacity
+                // capped, so once they are full each new entry evicts an old one and the count
+                // stops changing, which used to silence the feed permanently. CaptureLogEntry
+                // already deduplicates through seenLog.
                 var playLog = Find.PlayLog?.AllEntries;
-                if (playLog != null && playLog.Count != lastPlayLogCount)
+                if (playLog != null)
                 {
-                    lastPlayLogCount = playLog.Count;
                     int start = Math.Max(0, playLog.Count - 20);
                     for (int i = start; i < playLog.Count; i++) CaptureLogEntry(playLog[i], "log");
                 }
                 var battles = Find.BattleLog?.Battles;
                 if (battles != null)
                 {
-                    int total = 0;
-                    for (int i = 0; i < battles.Count; i++) total += battles[i].Entries.Count;
-                    if (total != lastBattleCount)
+                    int budget = 20;
+                    for (int i = battles.Count - 1; i >= 0 && budget > 0; i--)
                     {
-                        lastBattleCount = total;
-                        int budget = 20;
-                        for (int i = battles.Count - 1; i >= 0 && budget > 0; i--)
-                        {
-                            var es = battles[i].Entries;
-                            for (int j = es.Count - 1; j >= 0 && budget > 0; j--, budget--) CaptureLogEntry(es[j], "battle");
-                        }
+                        var es = battles[i].Entries;
+                        for (int j = es.Count - 1; j >= 0 && budget > 0; j--, budget--) CaptureLogEntry(es[j], "battle");
                     }
                 }
-                if (seenLog.Count > 4000) seenLog.Clear();
+                // Re-seed from what is live, so trimming the dedup set cannot replay old entries.
+                if (seenLog.Count > 4000)
+                {
+                    seenLog.Clear();
+                    if (playLog != null)
+                    {
+                        int start = Math.Max(0, playLog.Count - 40);
+                        for (int i = start; i < playLog.Count; i++) seenLog.Add(playLog[i]);
+                    }
+                }
             }
             catch (Exception e)
             {
