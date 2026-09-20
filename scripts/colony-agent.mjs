@@ -762,18 +762,31 @@ export class ColonyAgent {
     return best.cand;
   }
 
-  /** Would the house stand up here? Samples the footprint for water, which nothing builds on. */
+  /**
+   * Would the house stand up here?
+   *
+   * Two ways it cannot. Water, which nothing builds on, and fog: RimWorld refuses every
+   * blueprint in territory the colony has not discovered, with "Cannot place in undiscovered
+   * areas". The fog check was missing and it cost a whole run. The base was sited nineteen cells
+   * from the best soil, in ground the founder had never walked, so every build order was refused
+   * and place() swallowed the error. The colony held a hundred and forty eight wood, the plan
+   * read "doing: Campfire", and not one blueprint existed.
+   */
   async buildableGround(b) {
     const samples = [[0, 0], [-8, 0], [14, 0], [0, -8], [0, 8], [-8, -8], [14, 8], [0, 20]];
     try {
       const cells = await Promise.all(samples.map(([dx, dz]) =>
         api.get(`/cell?x=${b.x + dx}&z=${b.z + dz}`).catch(() => null)));
-      let bad = 0;
+      let bad = 0, fogged = 0;
       for (const c of cells) {
         if (!c) { bad++; continue; }
+        if (c.fogged) fogged++;
         const terrain = String(c.terrain ?? "");
         if (/Water|Marsh|Lake|Ice/i.test(terrain)) bad++;
       }
+      // Any fog in the footprint at all disqualifies the site: a colony cannot build its way out
+      // of ground it has not seen, and it will not wander there on its own to reveal it.
+      if (fogged > 0) return false;
       return bad <= 1;
     } catch { return true; }
   }
@@ -1608,6 +1621,7 @@ export class ColonyAgent {
       this.placed.delete(key);
     }
 
+    let lastError = null;
     const offsets = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1], [2, 0], [0, 2], [-2, 0], [0, -2]];
     for (const [dx, dz] of offsets.slice(0, opts.exact ? 1 : offsets.length)) {
       const tx = x + dx, tz = z + dz;
@@ -1619,9 +1633,15 @@ export class ColonyAgent {
         this.stats.orders++;
         this.log(`Placed ${def} at (${tx}, ${tz}).`);
         return "placed";
-      } catch {}
+      } catch (e) { lastError = e?.message ?? String(e); }
     }
     this.failedPlacements.set(key, attempts + 1);
+    // Say why. Every offset was refused and the reason was thrown away, so a base sited in fog
+    // looked identical to a base that simply had no room, and the run sat on a hundred and
+    // forty eight wood with nothing ordered and nothing in the log to explain it.
+    if (lastError && this.every(`place-fail-${key}`, 30)) {
+      this.log(`Could not place ${def} near (${x}, ${z}): ${lastError}`);
+    }
     return false;
   }
 
