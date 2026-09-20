@@ -678,8 +678,20 @@ export class ColonyAgent {
     return "grow";
   }
 
+  /**
+   * Is a bed handled? A frame or a blueprint counts.
+   *
+   * This gated the entire house. A bed under construction is `Frame_Bed`, which this used to
+   * reject, so the colony waited for the bed to be finished before a single wall blueprint was
+   * laid. Laying a blueprint costs nothing and takes no time: it is how the colonist is given
+   * the work in the first place. Waiting for one job to finish before ordering the next is the
+   * opposite of how a RimWorld work board is meant to be used.
+   */
   hasAnyBed(built) {
-    for (const def of built) if (/^(Bed|DoubleBed|RoyalBed|Bedroll)/.test(def)) return true;
+    for (const def of built) {
+      const clean = String(def).replace(/^(Blueprint|Frame)_/i, "");
+      if (/^(Bed|DoubleBed|RoyalBed|Bedroll)/.test(clean)) return true;
+    }
     return false;
   }
 
@@ -1926,9 +1938,16 @@ export class ColonyAgent {
                     "BlocksGranite", "BlocksMarble", "BlocksSandstone", "BlocksLimestone", "BlocksSlate"];
       const pages = await Promise.all(defs.map((d) =>
         api.get(`/things?def=${d}&detail=1&limit=200`).catch(() => ({}))));
+      // On the very first turn of a session the base anchor has not been loaded yet, because
+      // foundColony runs later in the turn. Measuring distance from an undefined base gives NaN,
+      // every comparison against it is false, and the count silently falls back to the
+      // stockpiled figure: the first plan of the run said "Great hall 12/200 wood" while 264
+      // logs lay around the site. Without a base, count everything on the map instead, which is
+      // wrong only in the direction of being too generous for one turn.
+      const origin = this.base?.x != null ? this.base : null;
       pages.forEach((page, i) => {
         const loose = (page.things ?? [])
-          .filter((t) => t.x != null && dist(t, this.base) < 45)
+          .filter((t) => t.x != null && (origin === null || dist(t, origin) < 45))
           .reduce((n, t) => n + (t.count ?? 1), 0);
         if (loose > 0) counted[defs[i]] = loose;
       });
@@ -2041,8 +2060,22 @@ export class ColonyAgent {
    */
   async maybeReplan(colonists, snap, resources, threats) {
     const day = snap.day ?? 0;
+    // Every material the plan can be blocked on, in coarse buckets.
+    //
+    // A plan whose tasks read "blocked: needs more wood" is worthless the moment the wood
+    // arrives, and nothing else here changes when it does: the first plan of a run said
+    // 12/200 and stood unchanged while the pile grew to 264. Buckets rather than raw counts,
+    // because a plan that re-made itself every time a single log was hauled would be the
+    // four-second re-derivation this replaced. Fifty wood, or fifty steel, is roughly the
+    // granularity at which a build decision actually changes.
+    const BUCKET = 50;
+    const stockKeys = ["WoodLog", "Steel", "Cloth", "ComponentIndustrial", "Silver",
+                       "BlocksGranite", "BlocksMarble", "BlocksSandstone", "BlocksLimestone", "BlocksSlate"];
+    const stockPrint = stockKeys.map((k) => Math.floor((resources[k] ?? 0) / BUCKET)).join(",");
+    const woodBucket = Math.floor((resources.WoodLog ?? 0) / BUCKET);
     const fingerprint = [
       day,
+      stockPrint,
       colonists.length,
       threats.length > 0 ? "fight" : "calm",
       colonists.some((c) => c.downed) ? "down" : "up",
@@ -2055,9 +2088,12 @@ export class ColonyAgent {
     const reason = !this.planFingerprint ? "first plan"
       : day !== this.planDay ? `day ${day}`
       : threats.length > 0 ? "hostiles"
+      : stockPrint !== this.planStock ? `materials changed (wood ${resources.WoodLog ?? 0}, steel ${resources.Steel ?? 0})`
       : "something finished or broke";
     this.planFingerprint = fingerprint;
     this.planDay = day;
+    this.planWoodBucket = woodBucket;
+    this.planStock = stockPrint;
     await this.makePlan(colonists, snap, resources, reason);
   }
 
@@ -2087,9 +2123,29 @@ export class ColonyAgent {
 
     // Rooms, in the order a colony actually needs them. Each one waits until the colony can pay
     // for the whole thing, so nothing is ever left as an unclosed rectangle.
-    const cheapDone = built.has("Campfire") && this.hasAnyBed(built);
+    // Ordered, not finished. The campfire and the bed only have to be on the board before the
+    // rooms go on it too, because the whole point of a blueprint is to queue work the colonist
+    // walks to next. Requiring them to be complete meant the house waited on a bed that had
+    // nine ticks of work left.
+    const cheapDone = (built.has("Campfire") || built.has("Frame_Campfire") || built.has("Blueprint_Campfire"))
+      && this.hasAnyBed(built);
     if (cheapDone) {
       const held = await this.occupancy();
+
+      // One room in flight at a time.
+      //
+      // Each room is checked against the wood in store, so four rooms in a row all passed
+      // against the same 264 logs and the colony committed to roughly 620 wood of blueprints it
+      // could not pay for. A colonist then spreads itself across four unfinished rectangles,
+      // none of which gets a roof, which is the exact failure the "pay for the whole room"
+      // rule existed to prevent. So nothing new is ordered while anything already ordered is
+      // still standing as a blueprint or a frame.
+      const outstanding = [...held.values()].filter((v) => v.pending).length;
+    this.pendingBuilds = outstanding;
+      if (outstanding > 0) {
+        if (this.every("room-wip", 40)) this.log(`${outstanding} wall or door still unbuilt; not starting another room until they are up.`);
+      } else {
+
       const plan = this.roomPlan(colonists.length);
       for (const room of plan) {
         if (room.prison && (colonists.length < 2 || !this.placed.has("room-hall"))) continue;
@@ -2100,6 +2156,7 @@ export class ColonyAgent {
           if (this.every(`short-${room.key}`, 120)) this.log(`${room.label} needs about ${result.cost} wood, ${result.short} more than the ${wood} in store.`);
           break;                                        // and do not skip ahead to a cheaper room
         }
+      }
       }
     }
 
@@ -2350,7 +2407,9 @@ export class ColonyAgent {
       Firefighter: 1, Patient: 1, PatientBedRest: 1, BasicWorker: 1,
       Doctor: 1,
       Cooking: 2,
-      Construction: 2,
+      // Construction leads while anything is blueprinted. A blueprint is a promise the colony
+      // already paid for: leaving it level with hauling means the wood walks past the wall.
+      Construction: (this.pendingBuilds ?? 0) > 0 ? 1 : 2,
       Growing: 2,
       PlantCutting: 3,          // below Growing: sowing and harvesting beat felling trees
       Hunting: 3,
@@ -2383,10 +2442,17 @@ export class ColonyAgent {
       // Ripe crops in the ground: Growing leads. Nothing ripe yet: PlantCutting leads, so the
       // colonist picks bushes rather than walking off to sow something that pays in days.
       const ripe = (this.lastSurvey?.cropsRipe ?? 0) > 0;
+      // With a house blueprinted and meals capped at a dozen, building is the work that matters.
+      // A colonist left with Cooking at 1 will cook the twelfth meal before laying the first
+      // wall, because a pawn finishes every job at one priority before it looks at the next.
+      const buildingWaiting = (this.pendingBuilds ?? 0) > 0;
       return { ...base,
                PlantCutting: ripe ? 2 : 1,
                Growing: ripe ? 1 : 2,
-               Cooking: 1, Hunting: 2, Construction: 2, Crafting: 2,
+               Cooking: buildingWaiting ? 2 : 1,
+               Hunting: 2,
+               Construction: buildingWaiting ? 1 : 2,
+               Crafting: 2,
                // Hauling stays low without starving a build site: Construction carries its own
                // ConstructDeliverResourcesToBlueprints giver, so the builder fetches its own wood.
                Hauling: 4, Mining: 4, Research: 4, Tailoring: 4, Smithing: 4 };

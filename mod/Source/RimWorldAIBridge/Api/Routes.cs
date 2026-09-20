@@ -186,7 +186,7 @@ namespace RimWorldAIBridge
                 return Serializers.Pawn(p, true);
             });
 
-            Doc(s, "GET", "/things", "List things on the map. ?cat=Item|Building|Plant|Filth &def=substring &label=substring &rect=x,z,w,h &forbidden=1 &player=1 &limit=100 &offset=0 &detail=1", r =>
+            Doc(s, "GET", "/things", "List things on the map. ?cat=Item|Building|Plant|Filth|Ethereal &def=substring &label=substring &rect=x,z,w,h &forbidden=1 &player=1 &limit=100 &offset=0 &detail=1. Blueprints and frames are category Ethereal and are left out of an unfiltered listing; ask for cat=Ethereal, or for a def containing Blueprint or Frame, to see pending builds.", r =>
             {
                 var map = Lookup.MapFrom(r);
                 string cat = r.Q("cat"); string def = r.Q("def"); string label = r.Q("label");
@@ -195,7 +195,17 @@ namespace RimWorldAIBridge
                 CellRect? rect = null;
                 string rs = r.Q("rect");
                 if (rs != null) { var parts = rs.Split(','); if (parts.Length == 4) rect = new CellRect(int.Parse(parts[0]), int.Parse(parts[1]), int.Parse(parts[2]), int.Parse(parts[3])); }
-                IEnumerable<Thing> pool = map.listerThings.AllThings.Where(t => !(t is Pawn) && t.def.category != ThingCategory.Mote && t.def.category != ThingCategory.Projectile && t.def.category != ThingCategory.Gas && t.def.category != ThingCategory.Ethereal);
+                // Ethereal is where blueprints and frames live, and excluding it unconditionally
+                // made every pending build invisible to every query except /cell. The agent
+                // therefore believed no room had been ordered, re-ordered rooms it had already
+                // paid for, and reported "0 walls already shared" for rooms standing against
+                // three finished neighbours. It is still excluded from an unfiltered listing,
+                // because a bare /things should not be a wall of blueprint entries, but asking
+                // for it by category or by a Blueprint_/Frame_ def name now returns it.
+                bool wantsEthereal = string.Equals(cat, "Ethereal", StringComparison.OrdinalIgnoreCase)
+                    || (!string.IsNullOrEmpty(def) && (def.IndexOf("Blueprint", StringComparison.OrdinalIgnoreCase) >= 0
+                                                    || def.IndexOf("Frame", StringComparison.OrdinalIgnoreCase) >= 0));
+                IEnumerable<Thing> pool = map.listerThings.AllThings.Where(t => !(t is Pawn) && t.def.category != ThingCategory.Mote && t.def.category != ThingCategory.Projectile && t.def.category != ThingCategory.Gas && (wantsEthereal || t.def.category != ThingCategory.Ethereal));
                 if (!string.IsNullOrEmpty(cat)) pool = pool.Where(t => string.Equals(t.def.category.ToString(), cat, StringComparison.OrdinalIgnoreCase));
                 if (!string.IsNullOrEmpty(def)) pool = pool.Where(t => t.def.defName.IndexOf(def, StringComparison.OrdinalIgnoreCase) >= 0);
                 if (!string.IsNullOrEmpty(label)) pool = pool.Where(t => t.Label.IndexOf(label, StringComparison.OrdinalIgnoreCase) >= 0);
