@@ -360,6 +360,7 @@ export class ColonyAgent {
     //    current phase.
     await this.manageNeeds(colonists, snap, resources);
     await this.manageLetters(snap, colonists);
+    await this.diagnoseMood(colonists, snap);
 
     // 2. One objective at a time.
     //
@@ -384,6 +385,10 @@ export class ColonyAgent {
         await this.allowFood();
         if (this.every("clear-chop", 6)) await this.clearWoodDesignations();
         if (this.every("food", 3)) await this.manageFood(colonists, snap, resources);
+        // The free structures are part of the food solution, not a distraction from it: the
+        // crafting spot makes the bow, the butcher spot turns a kill into meat, and both cost
+        // nothing and take almost no work.
+        if (this.every("free-build", 10)) await this.ensureFreeStructures();
         // The bow is PART of solving hunger, not a project that waits until hunger is solved.
         // RimWorld will not let a pawn take a hunt job without a ranged weapon, so a colony with
         // no bow cannot eat meat at all. Leaving the bow to its own phase deadlocked the agent:
@@ -460,6 +465,50 @@ export class ColonyAgent {
     await this.manageCamera(colonists, false);
     if (this.every("status", 5)) this.printStatus(snap, day, colonists);
     return false;
+  }
+
+  // ---------------------------------------------------------------- diagnostics
+
+  /**
+   * Read the actual mood ledger for a colonist: every thought and what it is worth.
+   *
+   * Guessing at mood cost a colony. The real numbers on a day-3 naked start were Malnourished
+   * -20, then Slept in the cold, Slept outside, Slept on ground and Uncomfortable for another
+   * -15 between them, against a break threshold of 35. Food and a bed are not two separate
+   * problems, they ARE the mood problem.
+   */
+  async moodLedger(pawnId) {
+    try {
+      const d = await api.get(`/pawn/${pawnId}?detail=1`);
+      const thoughts = (d.thoughts ?? []).map((t) => {
+        const m = String(t).match(/^(.*?)\s*([+-]\d+(?:\.\d+)?)$/);
+        return m ? { label: m[1].trim(), effect: Number(m[2]) } : { label: String(t), effect: 0 };
+      });
+      const negatives = thoughts.filter((t) => t.effect < 0).sort((a, b) => a.effect - b.effect);
+      return { thoughts, negatives, worst: negatives[0] ?? null };
+    } catch { return { thoughts: [], negatives: [], worst: null }; }
+  }
+
+  /** Log the mood breakdown when a colonist is near breaking, so the cause is on the record. */
+  async diagnoseMood(colonists, snap) {
+    for (const c of colonists) {
+      const mood = c.needs?.mood ?? 1;
+      const threshold = c.moodBreakThreshold ?? 0.35;
+      if (mood > threshold + 0.12) continue;
+      if (!this.every(`mood-diag-${c.id}`, 60)) continue;
+      const { negatives } = await this.moodLedger(c.id);
+      if (negatives.length === 0) continue;
+      const top = negatives.slice(0, 4).map((t) => `${t.label} ${t.effect}`).join(", ");
+      const total = negatives.reduce((a, t) => a + t.effect, 0);
+      this.log(`MOOD ${c.name} at ${Math.round(mood * 100)}% (break ${Math.round(threshold * 100)}%): ${top} [total ${total}]`);
+      this.journal("mood-breakdown", {
+        pawn: c.name,
+        mood: Math.round(mood * 100),
+        threshold: Math.round(threshold * 100),
+        negatives: negatives.map((t) => [t.label, t.effect]),
+      }, snap);
+      this.worstMood = { pawn: c.name, negatives };
+    }
   }
 
   // ---------------------------------------------------------------- phases
@@ -578,8 +627,11 @@ export class ColonyAgent {
     await this.thought(`Founded ${snap.colonyName ?? "the colony"} at (${b.x}, ${b.z}). Founder: ${founder.name}.`);
     await this.narrate("founding", "colony founded", `${founder.name} has landed with nothing at all. Naked Brutality start, no weapon, no food, no shelter. Base anchored at ${b.x}, ${b.z} in a ${snap.weather ?? "clear"} ${snap.temperatureC ?? "?"} degree temperate forest.`, 0, { priority: "high", askChat: true });
 
-    // Clear the build footprint so blueprints can land.
-    await api.tryPost("/designate", { type: "chop", rect: { x: b.x - 5, z: b.z - 5, w: 11, h: 11 } });
+    // Deliberately NOT designating trees here. The build footprint can wait: a chop designation
+    // issued at founding is the first thing on the work board, shares the HarvestPlant
+    // designation and the PlantCutting work type with berries, and a pawn clears every job at one
+    // priority before looking at the next. Three founders spent their first two days felling oaks
+    // at single digit food because of this one call.
     // Home area around the base so items on the ground count and get hauled.
     const home = await api.tryPost("/area/home", { rect: { x: b.x - 16, z: b.z - 16, w: 33, h: 33 }, add: true });
     this.log(`Home area: ${home ? JSON.stringify(home).slice(0, 120) : "failed"}`);
@@ -596,6 +648,13 @@ export class ColonyAgent {
     // never a resource excuse for skipping them, so they go down on the first turn.
     await this.place("sleepingspot", "SleepingSpot", b.x + 1, b.z - 1);
     await this.place("craftingspot", "CraftingSpot", b.x + 6, b.z + 2);
+    // Rice, immediately. A growing zone costs nothing, sowing is Growing work rather than
+    // PlantCutting so it does not compete with foraging, and 25 tiles feeds one colonist
+    // indefinitely from about day six. Every colony that starved did so before day six.
+    if (!this.zones.has("rice")) {
+      const z = await api.tryPost("/zone", { type: "growing", rect: { x: b.x - 8, z: b.z + 5, w: 6, h: 5 }, plant: "Plant_Rice", label: "Rice" });
+      if (z) { this.zones.add("rice"); await this.thought("Rice sown on day one: thirty tiles, ready in about five and a half days."); }
+    }
     // Arming the colony is the single highest-value thing in the first two days. Two founders
     // have now been lost to a drifter while the colony had hundreds of wood and no weapon.
     this.weaponRush = true;
@@ -1097,25 +1156,57 @@ export class ColonyAgent {
     } catch {}
   }
 
+  /**
+   * Designate wood only when something queued actually needs it, and only enough for that.
+   *
+   * The previous version topped the colony up to 250 wood on a timer. Because felling a tree is
+   * PlantCutting work and a pawn completes every job at one priority before looking at the next,
+   * a standing wood order meant the colonist did nothing but cut plants and haul the result. The
+   * observed behaviour across four colonies was exactly that: plant cutting and hauling, almost
+   * nothing built.
+   */
   async manageWood(resources) {
-    // Never put trees on the board while people are starving: they compete with berries for the
-    // same work type and the same designation, and trees usually win on count.
+    // Never compete with food.
     if (this.foodEmergency) return;
     const wood = resources.WoodLog ?? 0;
-    if (wood >= 250) return;
-    const pending = await this.pendingDesignations("CutPlant") + await this.pendingDesignations("HarvestPlant");
-    if (pending > 8) return;
+    const need = this.woodNeeded(resources);
+    if (wood >= need) return;
+
+    const pending = await this.pendingDesignations("HarvestPlant");
+    if (pending > 6) return;          // there is already plant work queued; do not pile on
+
+    // About 20 wood per tree, so ask for the shortfall and nothing more.
+    const shortfall = need - wood;
+    const wanted = Math.min(12, Math.max(2, Math.ceil(shortfall / 20)));
     const b = this.base;
-    for (const r of [12, 20, 30, 40]) {
-      const res = await api.tryPost("/designate", { type: "chop", rect: { x: b.x - r, z: b.z - r, w: r * 2, h: r * 2 } });
-      if (res && (res.designated ?? 0) > 0) {
+    try {
+      const treeDefs = ["Plant_TreeOak", "Plant_TreePoplar", "Plant_TreePine", "Plant_TreeBirch", "Plant_TreeWillow", "Plant_TreeMaple"];
+      const pages = await Promise.all(treeDefs.map((d) =>
+        api.get(`/things?def=${d}&detail=1&limit=200`).catch(() => ({}))));
+      const trees = pages
+        .flatMap((r) => r.things ?? [])
+        .filter((t) => t.x != null && (t.growth ?? 1) > 0.5)
+        .map((t) => ({ ...t, d: dist(t, b) }))
+        .sort((a, c) => a.d - c.d)
+        .slice(0, wanted);
+      if (trees.length === 0) return;
+      const r = await api.tryPost("/designate", { type: "chop", things: trees.map((t) => t.id) });
+      if (r && (r.designated ?? 0) > 0) {
         this.stats.orders++;
-        this.log(`Designated ${res.designated} wood-yielding plants within ${r} cells (wood ${wood}).`);
-        if (wood < 40) await this.thought(`Chopping wood within ${r} cells. We need ${Math.max(0, 80 - wood)} more for the hut.`);
-        return;
+        this.log(`Designated ${r.designated} tree(s) for ${need} wood (have ${wood}, need it for: ${this.woodReason}).`);
       }
-    }
-    this.log(`No choppable plants found within 40 cells (wood ${wood}).`);
+    } catch {}
+  }
+
+  /** Exactly what the next build step costs, so the colony never cuts wood it has no use for. */
+  woodNeeded(resources) {
+    const built = this.builtDefs ?? new Set();
+    if (!built.has("Campfire")) { this.woodReason = "a campfire"; return 20; }
+    if (!this.hasAnyBed(built)) { this.woodReason = "a bed"; return 45; }
+    if (!built.has("Table1x2c") && !built.has("Table2x2c")) { this.woodReason = "a table and a stool"; return 55; }
+    if (!this.placed.has("hut")) { this.woodReason = "walls and a door"; return 150; }
+    this.woodReason = "a reserve for repairs and furniture";
+    return 200;
   }
 
   async manageSteel(resources, colonists = [], day = 1) {
@@ -1147,32 +1238,77 @@ export class ColonyAgent {
    * the world and knows the structure is missing, otherwise a burned-down campfire is never
    * rebuilt because the ledger still remembers placing one.
    */
+  /**
+   * Place a blueprint once, and once only.
+   *
+   * Placing a blueprint on a cell that already holds one is a TOGGLE in RimWorld: it cancels the
+   * pending build. So re-issuing a build order for something already queued does not reinforce
+   * it, it destroys it. That is the "construction botched" spam, and it is why the colony kept
+   * starting a sleeping spot and never finishing one.
+   *
+   * The rule is tell it once. `force` no longer means "issue it again"; it means "check the cell
+   * and only place if there is genuinely nothing there".
+   */
   async place(key, def, x, z, opts = {}) {
     if (this.placed.has(key) && !opts.force) return "already";
-    if (opts.force) {
-      // `force` means the caller checked the world and the finished building is missing. That is
-      // still true while its blueprint is standing, so without this cooldown the agent re-places
-      // and re-announces the same table every single cycle until construction completes.
-      const placedAt = this.placedAt.get(key) ?? -Infinity;
-      if (this.turn - placedAt < 120) return "already";
-      this.placed.delete(key);
-      this.failedPlacements.delete(key);
-    }
     const attempts = this.failedPlacements.get(key) ?? 0;
     if (attempts > 6) return false;
+
+    if (opts.force && this.placed.has(key)) {
+      // Something already stands here or is being built here: leave it alone.
+      const prev = this.placed.get(key);
+      if (prev && await this.cellOccupied(prev.x, prev.z)) return "already";
+      this.placed.delete(key);
+    }
+
     const offsets = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1], [2, 0], [0, 2], [-2, 0], [0, -2]];
     for (const [dx, dz] of offsets.slice(0, opts.exact ? 1 : offsets.length)) {
+      const tx = x + dx, tz = z + dz;
+      if (await this.cellOccupied(tx, tz)) continue;
       try {
-        await api.post("/build", { def, x: x + dx, z: z + dz, rot: opts.rot ?? 0, stuff: opts.stuff });
-        this.placed.set(key, { def, x: x + dx, z: z + dz });
+        await api.post("/build", { def, x: tx, z: tz, rot: opts.rot ?? 0, stuff: opts.stuff });
+        this.placed.set(key, { def, x: tx, z: tz });
         this.placedAt.set(key, this.turn);
         this.stats.orders++;
-        this.log(`Placed ${def} at (${x + dx}, ${z + dz}).`);
+        this.log(`Placed ${def} at (${tx}, ${tz}).`);
         return "placed";
       } catch {}
     }
     this.failedPlacements.set(key, attempts + 1);
     return false;
+  }
+
+  /** Is there a building, blueprint or frame on this cell already? One call, and definitive. */
+  async cellOccupied(x, z) {
+    try {
+      const c = await api.get(`/cell?x=${x}&z=${z}`);
+      return (c.things ?? []).some((t) => {
+        const def = String(t.def ?? "");
+        // Blueprints and frames are category Ethereal, named Blueprint_<Def> and Frame_<Def>.
+        return String(t.cat ?? "") === "Building" || /^(Blueprint|Frame)_/i.test(def);
+      });
+    } catch { return false; }
+  }
+
+  /**
+   * Does this colony already have this thing, built or pending, anywhere near the base?
+   *
+   * Asked of the world rather than of the agent's own ledger, because the ledger is empty after
+   * any restart. Trusting it meant the agent re-placed a sleeping spot one cell over on every
+   * relaunch, and since placing a blueprint where one already stands cancels it, the colony
+   * churned through half built spots and finished none.
+   */
+  async alreadyHave(def) {
+    const b = this.base;
+    try {
+      const [done, pending, frames] = await Promise.all([
+        api.get(`/things?def=${def}&player=1&limit=50`).catch(() => ({})),
+        api.get(`/things?def=Blueprint_${def}&limit=50`).catch(() => ({})),
+        api.get(`/things?def=Frame_${def}&limit=50`).catch(() => ({})),
+      ]);
+      const all = [...(done.things ?? []), ...(pending.things ?? []), ...(frames.things ?? [])];
+      return all.some((t) => t.x != null && dist(t, b) < 25);
+    } catch { return false; }
   }
 
   async manageBase(colonists, resources) {
@@ -1523,8 +1659,14 @@ export class ColonyAgent {
     if (this.foodEmergency) {
       // Harvesting a berry bush is PlantCutting. It has to outrank every other plant job, and
       // hauling has to drop, or a starving colonist stockpiles wood instead of eating.
-      return { ...base, PlantCutting: 1, Growing: 1, Cooking: 1, Hunting: 2, Hauling: 4,
-               Construction: 4, Crafting: 4, Mining: 4, Research: 4, Tailoring: 4, Smithing: 4 };
+      //
+      // Construction stays at 2, NOT 4. The crafting spot, butcher spot and sleeping spot are
+      // free and take almost no work, and the crafting spot is what produces the bow, which is
+      // the only way to hunt, which is the actual food supply. Burying Construction during a
+      // food emergency meant the last founder queued a bow bill on a crafting spot that was
+      // never built, and starved beside 265 wood.
+      return { ...base, PlantCutting: 1, Growing: 1, Cooking: 1, Hunting: 2, Construction: 2,
+               Crafting: 2, Hauling: 4, Mining: 4, Research: 4, Tailoring: 4, Smithing: 4 };
     }
     if (this.weaponRush) {
       return { ...base, Crafting: 1, Hauling: 3, Construction: 3, Mining: 4, Research: 4 };
@@ -1587,9 +1729,16 @@ export class ColonyAgent {
   async clearWoodDesignations() {
     try {
       const b = this.base;
-      const res = await api.get(`/things?cat=Plant&detail=1&rect=${b.x - 60},${b.z - 60},121,121&limit=500`);
-      // Trees, and anything else woody that is not itself food.
-      const trees = (res.things ?? []).filter((t) => t.tree && !((t.nutrition ?? 0) > 0));
+      // By definition, not by category. A cat=Plant query returns hundreds of grass entries
+      // first, so the trees never appeared in the page and nothing was ever cancelled.
+      const treeDefs = ["Plant_TreeOak", "Plant_TreePoplar", "Plant_TreePine", "Plant_TreeBirch",
+                        "Plant_TreeWillow", "Plant_TreeCypress", "Plant_TreeMaple", "Plant_TreeTeak",
+                        "Plant_TreeDrago", "Plant_TreeBamboo", "Plant_TreeCecropia", "Plant_TreePalm"];
+      const pages = await Promise.all(treeDefs.map((d) =>
+        api.get(`/things?def=${d}&detail=1&limit=300`).catch(() => ({}))));
+      const trees = pages
+        .flatMap((r) => r.things ?? [])
+        .filter((t) => t.x != null && dist(t, b) < 70);
       if (trees.length === 0) return;
       const r = await api.tryPost("/designate", { type: "cancel", things: trees.map((t) => t.id) });
       if (r && (r.designated ?? 0) > 0) {
@@ -1599,6 +1748,26 @@ export class ColonyAgent {
         await this.forage(this.base);
       }
     } catch {}
+  }
+
+  /**
+   * Place the buildings that cost nothing: a sleeping spot, a crafting spot and a butcher spot.
+   * All three are free, take almost no work, and two of them are the difference between a colony
+   * that can feed itself and one that cannot.
+   */
+  async ensureFreeStructures() {
+    const b = this.base;
+    const built = this.builtDefs ?? new Set();
+    const plan = [
+      ["craftingspot", "CraftingSpot", b.x + 6, b.z + 2, true],
+      ["butcherspot", "ButcherSpot", b.x + 6, b.z - 2, true],
+      ["sleepingspot", "SleepingSpot", b.x + 1, b.z - 1, !this.hasAnyBed(built)],
+    ];
+    for (const [key, def, x, z, wanted] of plan) {
+      if (!wanted) continue;
+      if (await this.alreadyHave(def)) { this.placed.set(key, { def, x, z }); continue; }
+      await this.place(key, def, x, z, { force: true });
+    }
   }
 
   /** Unforbid food anywhere near the base so the colony's own AI can actually eat it. */
