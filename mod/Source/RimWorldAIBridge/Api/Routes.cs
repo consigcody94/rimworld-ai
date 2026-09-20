@@ -394,6 +394,19 @@ namespace RimWorldAIBridge
                 return new Dictionary<string, object> { { "type", type }, { "count", results.Count }, { "defs", results } };
             });
 
+            Doc(s, "GET", "/debug/failures", "Construction and build failures the bridge detected, which never appear in /events because the game shows them as floating text over the pawn rather than as messages. ?limit=50", r =>
+            {
+                Lookup.RequirePlaying();
+                return new Dictionary<string, object> { { "summary", Diagnostics.Summary() }, { "failures", Diagnostics.Recent(r.QInt("limit", 50)) } };
+            });
+
+            Doc(s, "GET", "/debug/pawn/{idOrName}", "Why a pawn can or cannot do something: the stats that decide success (ConstructSuccessChance and friends), current job and who assigned it, mental state, and every work type with its priority or why it is disabled.", r =>
+            {
+                var map = Lookup.MapFrom(r);
+                var p = Lookup.FindPawn(map, r.Segments[2]) ?? throw new BridgeException("No pawn '" + r.Segments[2] + "'", 404);
+                return Diagnostics.PawnDiagnostics(p);
+            });
+
             Doc(s, "GET", "/screenshot", "PNG of the current frame. ?width=1024 downscales. Returns image/png (not JSON).", r =>
             {
                 int width = r.QInt("width", 1024);

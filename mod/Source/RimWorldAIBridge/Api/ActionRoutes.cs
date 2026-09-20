@@ -11,6 +11,21 @@ namespace RimWorldAIBridge
 {
     public static partial class Routes
     {
+        /// <summary>
+        /// True when the game would place this instantly: no material cost and no build work.
+        /// </summary>
+        private static bool IsInstantBuild(BuildableDef def, ThingDef stuff)
+        {
+            try
+            {
+                if (def.MadeFromStuff) return false;
+                var costs = def.CostListAdjusted(stuff, false);
+                if (costs != null && costs.Count > 0) return false;
+                return def.GetStatValueAbstract(StatDefOf.WorkToBuild, stuff) <= 0f;
+            }
+            catch { return false; }
+        }
+
         private static void RegisterActions(HttpServer s)
         {
             // ---------------------------------------------------------- time
@@ -272,8 +287,34 @@ namespace RimWorldAIBridge
                     var t = ThingMaker.MakeThing(td, stuff); t.SetFactionDirect(Faction.OfPlayer);
                     placed = GenSpawn.Spawn(t, c, map, rot);
                 }
-                else placed = GenConstruct.PlaceBlueprintForBuild(def, c, map, rot, Faction.OfPlayer, stuff);
-                return Bridge.Ok("placed", placed?.thingIDNumber, "def", def.defName, "x", c.x, "z", c.z, "rot", rot.AsInt, "stuff", stuff?.defName);
+                else
+                {
+                    placed = GenConstruct.PlaceBlueprintForBuild(def, c, map, rot, Faction.OfPlayer, stuff);
+
+                    // Buildings that cost nothing and take no work, such as a sleeping spot, a
+                    // crafting spot or a butcher spot, are placed INSTANTLY by the game's own
+                    // designator. There is no blueprint and no construction job.
+                    //
+                    // Going through a blueprint for those was a real defect: a colonist had to
+                    // take a construction job for a zero work building, that job rolled
+                    // ConstructSuccessChance, and at Construction 0 that is 75 percent. Because
+                    // there were no materials to lose, a failure cost nothing and the pawn
+                    // retried at once, so a Construction 0 colonist produced an endless stack of
+                    // "Construction failed" motes and never finished a spot. Matching the
+                    // designator here removes the phantom job entirely.
+                    var instantDef = def as ThingDef;
+                    if (placed is Blueprint && instantDef != null && IsInstantBuild(def, stuff))
+                    {
+                        // Drop the blueprint and put the real thing down, which is what the
+                        // game's own designator does for a zero cost, zero work building.
+                        placed.Destroy(DestroyMode.Cancel);
+                        var t = ThingMaker.MakeThing(instantDef, stuff);
+                        t.SetFactionDirect(Faction.OfPlayer);
+                        placed = GenSpawn.Spawn(t, c, map, rot);
+                    }
+                }
+                return Bridge.Ok("placed", placed?.thingIDNumber, "def", def.defName, "x", c.x, "z", c.z, "rot", rot.AsInt, "stuff", stuff?.defName,
+                                 "instant", placed != null && !(placed is Blueprint) && !(placed is Frame));
             });
 
             Doc(s, "ANY", "/build/bulk", "Place many blueprints. {items:[{def,x,z,rot,stuff},...]} Returns per-item results.", r =>

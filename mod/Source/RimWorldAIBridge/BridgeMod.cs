@@ -74,6 +74,7 @@ namespace RimWorldAIBridge
                 try { Prefs.Save(); } catch { }
                 MainThread.EnsurePump();
                 EventLog.Install();
+                Diagnostics.Install();
                 MainThread.OnEveryFrame(ApplyPendingColonyName);
                 MainThread.OnEveryFrame(FollowCamera.Update);
                 Start(force: false);
