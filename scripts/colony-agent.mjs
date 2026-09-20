@@ -551,6 +551,7 @@ export class ColonyAgent {
     await this.manageCorpses();
     await this.manageUpgrades();
     if (this.every("work", 30)) await this.manageWork(colonists);
+    await this.enableAllWork(colonists);
     if (this.every("supplies", 40)) await this.manageSupplies(resources);
 
     if (colonists.length >= POPULATION_TARGET && this.every("milestone", 300)) {
@@ -2477,10 +2478,21 @@ export class ColonyAgent {
       Mining: 4,
       Hauling: 3,               // never 1: it would eat the whole day
       Research: 4,
-      Tailoring: 4, Smithing: 4, Warden: solo ? 0 : 2,
-      Art: 0, Cleaning: colonists.length >= 4 ? 4 : 0,
-      Handling: colonists.length >= 3 ? 4 : 0,
-      Childcare: colonists.length >= 3 ? 3 : 0,
+      Tailoring: 4, Smithing: 4, Warden: solo ? 4 : 2,
+      // Nothing is ever switched off while the colony is small.
+      //
+      // Zero does not mean "low", it means "never". With one colonist a zero is a whole category
+      // of work that simply will not happen: nobody tames, nobody cleans, nobody wardens a
+      // prisoner, nobody makes anything for the sake of mood. A single pawn has no one to
+      // specialise against, so the right shape is everything on, ordered by what matters, with
+      // the low-value work at 4 where it fills the gaps rather than at 0 where it vanishes.
+      //
+      // These become real specialisations once there are enough people to divide the work, which
+      // is what the colonist-count thresholds are for.
+      Art: colonists.length >= 5 ? 4 : (solo ? 4 : 0),
+      Cleaning: colonists.length >= 4 ? 4 : (solo ? 4 : 0),
+      Handling: colonists.length >= 3 ? 4 : (solo ? 4 : 0),
+      Childcare: colonists.length >= 3 ? 3 : (solo ? 4 : 0),
     };
     if (lvl("Intellectual") >= 5) base.Research = 3;
 
@@ -2636,6 +2648,41 @@ export class ColonyAgent {
       }
     }
   }
+
+  /**
+   * Nothing a colonist can do is left at zero.
+   *
+   * A blank column in the work tab is not a low priority, it is a refusal, and the work plan set
+   * several of them: Art, Cleaning, Handling, Childcare and Warden were all zero for a colony of
+   * one. That is the whole of a category never happening, and with a single colonist there is
+   * nobody else it could fall to. This sweeps whatever the plan did not name and puts every
+   * remaining work type the pawn is capable of at 4, so it is done last but it is done.
+   */
+  async enableAllWork(colonists) {
+    if (colonists.length > 2) return;
+    if (!this.every("enable-all-work", 50)) return;
+    for (const c of colonists) {
+      if (c.dead || c.downed) continue;
+      try {
+        const d = await api.get(`/debug/pawn/${c.id}`);
+        const enabled = d?.workEnabled ?? {};
+        const disabled = new Set(d?.workDisabled ?? []);
+        const missing = Object.keys(ColonyAgent.ALL_WORK_TYPES)
+          .filter((w) => !disabled.has(w) && !(w in enabled));
+        if (missing.length === 0) continue;
+        for (const w of missing) await api.tryPost("/set_work", { pawn: c.id, work: w, priority: 4 });
+        this.log(`${c.name}: turned on ${missing.length} work type(s) that were switched off entirely (${missing.join(", ")}). With one colonist a zero is a category of work that never happens.`);
+      } catch {}
+    }
+  }
+
+  /** The twenty work types RimWorld ships, taken from its own WorkTypeDefs. */
+  static ALL_WORK_TYPES = {
+    Firefighter: 1, Patient: 1, Doctor: 1, PatientBedRest: 1, BasicWorker: 1, Warden: 1,
+    Handling: 1, Cooking: 1, Hunting: 1, Construction: 1, Growing: 1, Mining: 1,
+    PlantCutting: 1, Smithing: 1, Tailoring: 1, Art: 1, Crafting: 1, Hauling: 1,
+    Cleaning: 1, Research: 1,
+  };
 
   async manageWork(colonists) {
     await this.syncWorkPlan(colonists);
