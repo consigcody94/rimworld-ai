@@ -60,13 +60,32 @@ function startAgent() {
 }
 
 let lastDay = null;
+let gameGoneSince = null;
+let lastRelaunch = 0;
 let stuckTicks = 0;
 let lastTick = null;
 
 async function check() {
   let st;
   try { st = await bridge("/status"); }
-  catch { log("bridge unreachable; RimWorld may be starting or gone."); return; }
+  catch {
+    // The bridge lives inside RimWorld, so an unreachable bridge means the game itself is gone
+    // or still starting. This watched everything except the one process everything depends on:
+    // RimWorld quit, the capture went to window-lost, and the run was over with nothing in any
+    // log saying so.
+    const alive = execSync("pgrep -f 'MacOS/RimWorld' || true").toString().trim().length > 0;
+    if (alive) { log("RimWorld is running but the bridge is not answering yet; waiting."); return; }
+    const since = Date.now() - (gameGoneSince ?? Date.now());
+    if (gameGoneSince === null) { gameGoneSince = Date.now(); log("RimWorld is not running."); return; }
+    if (since < 30000) return;                     // it may be mid-quit or mid-launch
+    if (Date.now() - lastRelaunch < 180000) return; // never relaunch in a loop
+    lastRelaunch = Date.now();
+    gameGoneSince = null;
+    log("RimWorld has been gone for 30s; relaunching it. A new colony must be started once it reaches the menu.");
+    try { execSync("open -a RimWorld"); } catch (e) { log(`could not relaunch RimWorld: ${e.message}`); }
+    return;
+  }
+  gameGoneSince = null;
 
   if (!st.playing) { log(`no colony loaded (programState ${st.programState}).`); return; }
 
