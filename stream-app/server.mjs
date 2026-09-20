@@ -66,6 +66,7 @@ const PORT = parseInt(process.env.STREAM_PORT || "18888", 10);
 const BRIDGE_URL = (process.env.RIMWORLD_API || "http://127.0.0.1:18800").replace(/\/$/, "");
 
 // App State
+let currentPlan = null;
 let agentThoughts = [];
 
 import { VoiceEngine } from "./voice.mjs";
@@ -247,6 +248,32 @@ const server = http.createServer(async (req, res) => {
     // ------------------------------------------------------------------------
     // API: Push AI Agent Thought / Decision
     // ------------------------------------------------------------------------
+    // The agent's current plan, for the browser overlay. The same payload goes to the in-game
+    // task board, so a viewer reads the same list whether they are watching the game window or
+    // the overlay. Treated as untrusted text: it is rendered as textContent, never as markup.
+    if (pathname === "/api/plan" && req.method === "POST") {
+      const body = await parseJsonBody(req);
+      currentPlan = {
+        goal: str(body.goal, 80),
+        day: str(body.day, 40),
+        blocker: str(body.blocker, 120),
+        reason: str(body.reason, 60),
+        updatedAt: Date.now(),
+        tasks: Array.isArray(body.tasks)
+          ? body.tasks.slice(0, 12).map((t) => ({
+              label: str(t?.label, 60),
+              state: ["done", "doing", "blocked", "queued"].includes(t?.state) ? t.state : "queued",
+              note: str(t?.note, 50),
+            }))
+          : [],
+      };
+      return sendJson(res, 200, { ok: true, tasks: currentPlan.tasks.length });
+    }
+
+    if (pathname === "/api/plan" && req.method === "GET") {
+      return sendJson(res, 200, { ok: true, plan: currentPlan });
+    }
+
     if (pathname === "/api/thought" && req.method === "POST") {
       const body = await parseJsonBody(req);
       const thought = str(body.text, 400);

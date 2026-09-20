@@ -1,0 +1,1 @@
+defName                body  predator manhOnDmg manhOnTameFail wildness

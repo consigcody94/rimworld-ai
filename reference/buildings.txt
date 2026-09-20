@@ -1,0 +1,137 @@
+defName                    costList               stuff  work     category
+AncientConcreteBarrier     Steelx15               -      600      
+AncientCryptosleepCasket   Steelx180,Uraniumx5    -      -        
+AncientLamppost            Steelx15               -      400      
+AnimalBed                  -                      40     400      Furniture
+AnimalFlap                 -                      25     850      Structure
+AnimalSleepingBox          -                      25     180      Furniture
+Armchair                   -                      110    14000    Furniture
+Autodoor                   Steelx40,ComponentIndustrialx2 25     1100     Structure
+Barricade                  -                      5      320      Security
+Battery                    Steelx70,ComponentIndustrialx2 -      800      Power
+Bed                        -                      45     800      Furniture
+Bedroll                    -                      40     600      Furniture
+BedrollDouble              -                      85     1100     Furniture
+BilliardsTable             Clothx80,WoodLogx30    80     12000    Joy
+BiofuelRefinery            Steelx150,ComponentIndustrialx3 -      2000     Production
+Bookcase                   -                      20     500      Furniture
+BookcaseSmall              -                      10     250      Furniture
+Brewery                    WoodLogx120,Steelx30   -      2000     Production
+Campfire                   WoodLogx20             -      200      Temperature
+ChemfuelPoweredGenerator   Steelx100,ComponentIndustrialx3 -      2500     Power
+ChessTable                 -                      70     8000     Joy
+Column                     -                      20     750      Structure
+CommsConsole               Steelx120,ComponentIndustrialx4 -      2200     Misc
+Cooler                     Steelx90,ComponentIndustrialx3 -      1600     Temperature
+Couch                      -                      200    20000    Furniture
+CryptosleepCasket          Steelx180,Uraniumx5,ComponentIndustrialx4,ComponentSpacerx1 -      3200     Misc
+DeepDrill                  Steelx100,ComponentIndustrialx2 -      10000    Production
+DiningChair                -                      45     8000     Furniture
+Door                       -                      25     850      Structure
+DoubleBed                  -                      85     1500     Furniture
+Dresser                    -                      50     2000     Furniture
+DrugLab                    Steelx75,ComponentIndustrialx6 50     3500     Production
+EggBox                     -                      20     2000     Misc
+ElectricCrematorium        Steelx20,ComponentIndustrialx2 150    4500     Production
+ElectricSmelter            Steelx170,ComponentIndustrialx2 -      3500     Production
+ElectricSmithy             Steelx100,ComponentIndustrialx3 -      3000     Production
+ElectricStove              Steelx80,ComponentIndustrialx2 -      2000     Production
+ElectricTailoringBench     Steelx50,ComponentIndustrialx2 75     2500     Production
+EndTable                   -                      30     1000     Furniture
+FabricationBench           Steelx200,ComponentIndustrialx12,ComponentSpacerx2 -      5000     Production
+Fence                      -                      1      70       Structure
+FenceGate                  -                      25     500      Structure
+FermentingBarrel           Steelx10,WoodLogx30    -      600      Production
+FirefoamPopper             Steelx75,ComponentIndustrialx1 -      1500     Misc
+FlatscreenTelevision       Steelx140,ComponentIndustrialx16 -      40000    Joy
+FloodLight                 Steelx50               -      600      Furniture
+FueledSmithy               Steelx100              -      3000     Production
+FueledStove                Steelx80               -      2000     Production
+GameOfUrBoard              -                      35     6000     Joy
+GeothermalGenerator        Steelx340,ComponentIndustrialx8 -      12000    Power
+Gloomlight                 Plasteelx22,ComponentIndustrialx1 -      300      
+GroundPenetratingScanner   Steelx150,ComponentIndustrialx4,ComponentSpacerx1 -      12000    Misc
+HandTailoringBench         -                      75     2000     Production
+Heater                     Steelx50,ComponentIndustrialx1 -      1000     Temperature
+HiTechResearchBench        Steelx100,ComponentIndustrialx10 150    5000     Production
+HiddenConduit              Steelx2                -      280      Power
+HoopstoneRing              -                      20     100      Joy
+Hopper                     Steelx15               -      300      Production
+HorseshoesPin              -                      10     100      Joy
+HospitalBed                Steelx80,ComponentIndustrialx5 40     2800     Furniture
+HydroponicsBasin           Steelx100,ComponentIndustrialx1 -      2800     Production
+InfiniteChemreactor        Steelx200,ComponentSpacerx6 -      8000     
+LongRangeMineralScanner    Steelx200,ComponentIndustrialx6,ComponentSpacerx2 -      10000    Misc
+MegascreenTelevision       Steelx260,ComponentIndustrialx22 -      80000    
+MoisturePump               Steelx75,ComponentIndustrialx4 -      1500     Misc
+MultiAnalyzer              Steelx40,Plasteelx50,Goldx20,ComponentIndustrialx8 -      10000    Misc
+NutrientPasteDispenser     Steelx125,ComponentIndustrialx3 -      2200     Production
+OrbitalTradeBeacon         Steelx40,ComponentIndustrialx1 -      800      Misc
+OrnateDoor                 Goldx50                75     15000    Structure
+PassiveCooler              WoodLogx50             -      200      Temperature
+PenMarker                  -                      30     600      Misc
+PlantPot                   -                      20     250      Furniture
+PodLauncher                Steelx50,ComponentIndustrialx1 -      3000     Misc
+PokerTable                 Clothx50,WoodLogx25    50     10000    Joy
+PowerConduit               Steelx1                -      35       Power
+PowerSwitch                Steelx15,ComponentIndustrialx1 -      200      Power
+PsychicEmanator            Steelx50,ComponentSpacerx6 -      2000     
+RoyalBed                   Goldx50                100    50000    Furniture
+Sandbags                   -                      5      180      Security
+Sarcophagus                -                      60     2400     Misc
+SculptureGrand             -                      400    -        
+SculptureLarge             -                      100    -        
+SculptureSmall             -                      50     -        
+Shelf                      -                      20     500      Furniture
+ShelfSmall                 -                      10     250      Furniture
+ShipChunk                  ComponentIndustrialx11,Steelx40 -      12000    
+Ship_Beam                  Steelx200,Plasteelx40,ComponentIndustrialx3,ComponentSpacerx1 -      8000     Ship
+Ship_ComputerCore          Steelx150,ComponentSpacerx4,Goldx70,AIPersonaCorex1 -      16000    Ship
+Ship_CryptosleepCasket     Steelx120,Uraniumx14,ComponentIndustrialx3,ComponentSpacerx3 -      8000     Ship
+Ship_Engine                Steelx260,Plasteelx140,Uraniumx70,ComponentSpacerx6 -      50000    Ship
+Ship_Reactor               Steelx350,Plasteelx280,Uraniumx70,ComponentSpacerx8 -      65000    Ship
+Ship_SensorCluster         Steelx140,Goldx4,ComponentIndustrialx6,ComponentSpacerx6 -      30000    Ship
+ShuttleCrashed             Steelx40,Plasteelx70,ComponentIndustrialx10,ShuttleEnginex1 -      800      
+SimpleResearchBench        Steelx25               75     2800     Production
+SolarGenerator             Steelx100,ComponentIndustrialx3 -      2500     Power
+StandingLamp               Steelx20               -      300      Furniture
+SteleGrand                 -                      250    16000    Misc
+SteleLarge                 -                      125    8000     Misc
+Stool                      -                      25     450      Furniture
+SunLamp                    Steelx40               -      330      Furniture
+Table1x2c                  -                      28     750      Furniture
+Table2x2c                  -                      50     1500     Furniture
+Table2x4c                  -                      95     3000     Furniture
+Table3x3c                  -                      100    3300     Furniture
+TableButcher               WoodLogx20             75     2000     Production
+TableMachining             Steelx150,ComponentIndustrialx5 -      3000     Production
+TableSculpting             Steelx50               75     2500     Production
+TableStonecutter           Steelx30               75     2000     Production
+Telescope                  Steelx50,ComponentIndustrialx1 -      -        
+ToolCabinet                Steelx200              -      1800     Misc
+TorchWallLamp              WoodLogx15             -      100      Furniture
+TransportPod               Steelx60,ComponentIndustrialx1 -      1600     Misc
+TrapIED_AntigrainWarhead   Shell_AntigrainWarheadx1 -      1400     Security
+TrapIED_EMP                Shell_EMPx2            -      1400     Security
+TrapIED_Firefoam           Shell_Firefoamx2       -      1400     Security
+TrapIED_HighExplosive      Shell_HighExplosivex2  -      1400     Security
+TrapIED_Incendiary         Shell_Incendiaryx2     -      1400     Security
+TrapIED_Smoke              Shell_Smokex2          -      1400     Security
+TrapSpike                  -                      45     3200     Security
+TubeTelevision             Steelx80,ComponentIndustrialx4 -      10000    Joy
+Turret_Autocannon          Steelx350,Plasteelx40,ComponentIndustrialx6 -      15000    Security
+Turret_FoamTurret          Steelx70,ComponentIndustrialx3,Chemfuelx140 30     1800     Security
+Turret_MiniTurret          Steelx70,ComponentIndustrialx3 30     1800     Security
+Turret_Mortar              -                      75     2000     Security
+Turret_RocketswarmLauncher Plasteelx20,Steelx200,ComponentIndustrialx2,Chemfuelx180 -      10000    Security
+Turret_Sniper              Steelx300,Plasteelx30,Uraniumx60,ComponentIndustrialx6 -      15000    Security
+Urn                        -                      20     500      
+VanometricPowerCell        Steelx100,ComponentSpacerx6 -      -        
+Vent                       Steelx30               -      400      Temperature
+VitalsMonitor              Steelx50,ComponentIndustrialx3 -      6000     Misc
+Wall                       -                      5      135      Structure
+WallLamp                   Steelx15               -      330      Furniture
+WatermillGenerator         WoodLogx280,Steelx80,ComponentIndustrialx3 -      4000     Power
+WaterproofConduit          Steelx10               -      35       Power
+WindTurbine                Steelx100,ComponentIndustrialx2 -      3300     Power
+WoodFiredGenerator         Steelx100,ComponentIndustrialx2 -      2500     Power

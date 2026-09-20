@@ -1,0 +1,355 @@
+   mood  defName                            label                              days stack
+    -44  NeedFood                           extreme starvation                         
+    -40  PsychicDrone                       extreme psychic drone                      
+    -38  NeedFood                           advanced starvation                        
+    -35  ProsthophobeUnhappy                I have become what I hate                  
+    -32  NeedFood                           starving                                   
+    -30  MyOrganHarvested                   my organ harvested                    8   5
+    -30  ProsthophobeUnhappy                body purist nightmare                      
+    -30  PsychicDrone                       high psychic drone                         
+    -26  NeedFood                           badly malnourished                         
+    -25  ProsthophobeUnhappy                body purist horrified                      
+    -22  PsychicDrone                       moderate psychic drone                     
+    -20  AteHumanlikeMeatDirect             raw cannibalism                       1    
+    -20  CheatedOnMeMood                    cheated on by {0}                  25.0   2
+    -20  DivorcedMeMood                     divorced by {0}                    30.0   2
+    -20  ForcedMeToTakeDrugsMood            forced to take drugs                6.0    
+    -20  ForcedMeToTakeLuciferiumMood       forced to take luciferium           6.0    
+    -20  MyDaughterDied                     my daughter {0} died                       
+    -20  MyDaughterLost                     my daughter {0} lost                       
+    -20  MyHusbandDied                      my husband {0} died                        
+    -20  MyHusbandLost                      my husband {0} lost                        
+    -20  MySonDied                          my son {0} died                            
+    -20  MySonLost                          my son {0} lost                            
+    -20  MyWifeDied                         my wife {0} died                           
+    -20  MyWifeLost                         my wife {0} lost                           
+    -20  NeedFood                           malnourished                               
+    -20  NeedJoy                            recreation-starved                         
+    -20  Pain                               mind-shattering pain                       
+    -20  ProsthophobeUnhappy                body purist violated                       
+    -18  FailedToRescueRelative             failed to rescue {0}                 30   5
+    -18  MyFianceDied                       my fiance {0} died                         
+    -18  MyFianceLost                       my fiance {0} lost                         
+    -18  MyFianceeDied                      my fiancée {0} died                        
+    -18  MyFianceeLost                      my fiancée {0} lost                        
+    -18  NeedRest                           exhausted                                  
+    -18  RejectedMyProposalMood             my proposal was rejected by {0}    25.0   5
+    -16  EnvironmentCold                    absolutely freezing                        
+    -16  EnvironmentHot                     blistering hot                             
+    -16  MyLoverDied                        my lover {0} died                          
+    -16  MyLoverLost                        my lover {0} lost                          
+    -16  RotStink                           awful rot stink                            
+    -15  AteHumanlikeMeatAsIngredient       cooked cannibalism                    1    
+    -15  BrokeUpWithMeMood                  broken up with by {0}              25.0   2
+    -15  NeedBeauty                         hideous environment                        
+    -15  Pain                               intense pain                               
+    -15  ProsthophobeUnhappy                body purist disgusted                      
+    -14  DeadMansApparel                    tainted {0} etc                            
+    -14  MyBrotherDied                      my brother {0} died                        
+    -14  MyBrotherLost                      my brother {0} lost                        
+    -14  MySisterDied                       my sister {0} died                         
+    -14  MySisterLost                       my sister {0} lost                         
+    -12  AteCorpse                          ate corpse                            1    
+    -12  AteKibble                          ate kibble                            1    
+    -12  DrugDesireFascination              chemical starvation                        
+    -12  EnvironmentCold                    numbing cold                               
+    -12  EnvironmentHot                     sweltering hot                             
+    -12  MoodOffsetDepressive               depressive                                 
+    -12  MyGrandchildDied                   my grandchild {0} died                     
+    -12  MyGrandchildLost                   my grandchild {0} lost                     
+    -12  NeedFood                           ravenously hungry                          
+    -12  NeedRest                           tired                                      
+    -12  PsychicDrone                       low psychic drone                          
+    -11  DeadMansApparel                    tainted {0} (+2)                           
+    -10  AteRottenFood                      ate rotten food                       1    
+    -10  BrawlerUnhappy                     brawler has ranged weapon                  
+    -10  ColonistLeftUnburied               colonist left unburied                     
+    -10  DebugBad                           debug bad thought                   1.0 100
+    -10  NeedBeauty                         ugly environment                           
+    -10  NeedJoy                            recreation-deprived                        
+    -10  NeedRoomSize                       confined interior                          
+    -10  NightOwlDuringTheDay               night owl in daytime                       
+    -10  Pain                               serious pain                               
+    -10  PawnWithGoodOpinionDied            my friend {0} died                   20   5
+    -10  PawnWithGoodOpinionLost            my friend {0} lost                   20   5
+    -10  ProsthophobeUnhappy                body purist squeamish                      
+    -10  RotStink                           rot stink                                  
+    -10  SoldMyBondedAnimalMood             bonded animal given away             60  10
+    -10  SoldMyLovedOne                     loved one sold                      120  10
+     -9  NeedOutdoors                       entombed underground                       
+     -8  BondedAnimalDied                   bonded animal {0} died               20   5
+     -8  BondedAnimalLost                   bonded animal {0} lost               20   5
+     -8  DeadMansApparel                    tainted {0} (+1)                           
+     -8  DrugDesireFascination              chemical hunger                            
+     -8  EnvironmentCold                    cold                                       
+     -8  EnvironmentHot                     hot                                        
+     -8  Greedy                             greedy for impressive bedroom              
+     -8  Greedy                             greedy for impressive bedroom              
+     -8  Greedy                             greedy for impressive bedroom              
+     -8  HumanLeatherApparelSad             human leather {0} etc                      
+     -8  Jealous                            jealous of {0}'s bedroom                   
+     -8  MissingTongue                      missing tongue                             
+     -8  MoodOffsetTorturedArtist           Tortured artist                            
+     -8  MyFatherDied                       my father {0} died                         
+     -8  MyFatherLost                       my father {0} lost                         
+     -8  MyMotherDied                       my mother {0} died                         
+     -8  MyMotherLost                       my mother {0} lost                         
+     -8  NeedIndoors                        brutal outdoors                            
+     -8  TerribleSpeech                     terrible speech                       8  10
+     -7  AteRawFood                         ate raw food                          1    
+     -7  NeedIndoors                        very long outdoors                         
+     -7  NeedOutdoors                       trapped underground                        
+     -7  SleptInBarracks                    awful barracks                        1   1
+     -6  AteInsectMeatDirect                ate insect meat                       1    
+     -6  BondedAnimalBanished               bonded animal {0} banished            6   5
+     -6  ButcheredHumanlikeCorpse           I butchered humanlike                 6  10
+     -6  ColonistBanishedToDie              colonist banished to death            6   5
+     -6  ColonistLost                       colonist lost                         6   5
+     -6  DrugDesireInterest                 chemical starvation                        
+     -6  Greedy                             greedy for impressive bedroom              
+     -6  HumanLeatherApparelSad             human leather {0} (+2)                     
+     -6  KnowButcheredHumanlikeCorpse       we butchered humanlike                6   1
+     -6  KnowColonistExecuted               colonist organ-harvested              6   5
+     -6  KnowColonistExecuted               colonist ripscanned                   6   5
+     -6  KnowGuestExecuted                  someone was organ-murdered            6    
+     -6  KnowGuestExecuted                  someone was ripscanned                6    
+     -6  MoodOffsetPessimist                pessimist                                  
+     -6  Naked                              naked                                      
+     -6  NeedFood                           hungry                                     
+     -6  NeedRest                           drowsy                                     
+     -6  ObservedLayingRottingCorpse        observed rotting corpse             0.5   5
+     -6  RotStinkLingering                  rot stink lingering                        
+     -6  WasImprisoned                      was imprisoned                       12   1
+     -6  WitnessedDeathFamily               witnessed family member's death       6   1
+     -5  ApparelDamaged                     tattered apparel                           
+     -5  Ascetic                            ascetic has impressive bedroom             
+     -5  Ascetic                            ascetic has impressive bedroom             
+     -5  Ascetic                            ascetic has impressive bedroom             
+     -5  Ascetic                            ascetic has impressive bedroom             
+     -5  Ascetic                            ascetic has impressive bedroom             
+     -5  Ascetic                            ascetic has impressive bedroom             
+     -5  Ascetic                            ascetic has impressive bedroom             
+     -5  BondedAnimalReleased               bonded animal {0} released           15   5
+     -5  DeadMansApparel                    tainted {0}                                
+     -5  EnvironmentDark                    darkness                                   
+     -5  InsultedMood                       insulted                              2  10
+     -5  KnowColonistExecuted               colonist executed                     6   5
+     -5  KnowColonistOrganHarvested         colonist's organ harvested            8   5
+     -5  KnowGuestExecuted                  someone was executed                  6    
+     -5  KnowGuestOrganHarvested            someone's organ harvested             8   5
+     -5  KnowPrisonerDiedInnocent           innocent prisoner died                6   5
+     -5  MyHalfSiblingDied                  my half-sibling {0} died                   
+     -5  MyHalfSiblingLost                  my half-sibling {0} lost                   
+     -5  MyNephewDied                       my nephew {0} died                         
+     -5  MyNephewLost                       my nephew {0} lost                         
+     -5  MyNieceDied                        my niece {0} died                          
+     -5  MyNieceLost                        my niece {0} lost                          
+     -5  NeedBeauty                         unsightly environment                      
+     -5  NeedIndoors                        long outdoors                              
+     -5  NeedJoy                            recreation unfulfilled                     
+     -5  NeedOutdoors                       cabin fever                                
+     -5  NeedRoomSize                       cramped interior                           
+     -5  Pain                               minor pain                                 
+     -5  RebuffedMyRomanceAttemptMood       rebuffed by {0}                     3.0   5
+     -5  Sick                               sick                                       
+     -5  SleptInBarracks                    dull barracks                         1   1
+     -5  ToxicFallout                       toxic fallout                              
+     -5  WitnessedDeathAlly                 witnessed ally's death                2   5
+     -5  WrongApparelGender                 wearing {0} apparel                        
+     -4  ColonyPrisonerEscaped              Colonist prisoner escaped             6   5
+     -4  DrugDesireFascination              chemical want                              
+     -4  DrugDesireInterest                 chemical hunger                            
+     -4  EnvironmentCold                    chilly                                     
+     -4  EnvironmentHot                     sweaty                                     
+     -4  Greedy                             greedy for impressive bedroom              
+     -4  HospitalPatientRoomStats           awful hospital                             
+     -4  HumanLeatherApparelSad             human leather {0} (+1)                     
+     -4  MyAuntDied                         my aunt {0} died                           
+     -4  MyAuntLost                         my aunt {0} lost                           
+     -4  MyCousinDied                       my cousin {0} died                         
+     -4  MyCousinLost                       my cousin {0} lost                         
+     -4  MyGrandparentDied                  my grandparent {0} died                    
+     -4  MyGrandparentLost                  my grandparent {0} lost                    
+     -4  MyKinDied                          my kin {0} died                            
+     -4  MyKinLost                          my kin {0} lost                            
+     -4  MyUncleDied                        my uncle {0} died                          
+     -4  MyUncleLost                        my uncle {0} lost                          
+     -4  ObservedLayingCorpse               observed corpse                     0.5   3
+     -4  PrisonBarracks                     awful barracks                             
+     -4  PrisonerBanishedToDie              prisoner banished to death            6   5
+     -4  ProsthophileNoProsthetic           body modder frustrated                     
+     -4  SleptInBarracks                    mediocre barracks                     1   1
+     -4  SleptInCold                        slept in the cold                     1   1
+     -4  SleptInHeat                        slept in the heat                     1   1
+     -4  SleptOnGround                      slept on ground                       1   1
+     -4  SleptOutside                       slept outside                         1   1
+     -4  UninspiringSpeech                  uninspiring speech                    8  10
+     -4  WantToSleepWithSpouseOrLover       sleeping alone                             
+     -3  ApparelDamaged                     ratty apparel                              
+     -3  AteInsectMeatAsIngredient          ate cooked insect meat                1    
+     -3  AteWithoutTable                    ate without table                     1   1
+     -3  ClothedNudist                      constraining clothes                       
+     -3  ColonistBanished                   colonist banished                     6   5
+     -3  DeniedJoining                      denied joining                        6   5
+     -3  FailedRomanceAttemptOnMeLowOpinionMood had to rebuff {0}                   3.0   5
+     -3  KnowColonistDied                   colonist died                         6   5
+     -3  KnowColonistExecuted               colonist euthanized                   6   5
+     -3  KnowGuestExecuted                  someone was euthanized                6    
+     -3  KnowPrisonerSold                   prisoner sold                         4   5
+     -3  NeedComfort                        uncomfortable                              
+     -3  NeedIndoors                        outdoors                                   
+     -3  NeedOutdoors                       trapped indoors                            
+     -3  NotBondedAnimalMaster              not master of {0}                          
+     -3  NotBondedAnimalMaster              not {0}'s master                           
+     -3  SleptInBarracks                    decent barracks                       1   1
+     -3  SoakingWet                         soaking wet                         0.1   1
+     -3  UndergrounderOutdoors              undergrounder outdoors                     
+     -3  WitnessedDeathNonAlly              witnessed outsider's death            1   1
+     -2  DrugDesireInterest                 chemical want                              
+     -2  HospitalPatientRoomStats           dull hospital                              
+     -2  HumanLeatherApparelSad             human leather {0}                          
+     -2  KnowColonistExecuted               justified execution of colonist       6   5
+     -2  KnowGuestExecuted                  justified execution                   6    
+     -2  PrisonBarracks                     dull barracks                              
+     -2  PrisonCell                         awful prison cell                          
+     -2  SleptInBarracks                    slightly impressive barracks          1   1
+     -2  SleptInBedroom                     awful bedroom                         1   1
+     -1  NeedIndoors                        just outdoors                              
+     -1  NeedOutdoors                       stuck indoors                              
+     -1  SleepDisturbed                     disturbed sleep                       1   3
+     -1  SleptInBarracks                    impressive barracks                   1   1
+      1  DrugDesireInterestSatisfied        chemical comfort                           
+      1  HospitalPatientRoomStats           slightly impressive hospital               
+      1  PrisonBarracks                     slightly impressive barracks               
+      1  PrisonCell                         mediocre prison cell                       
+      1  SleptInBarracks                    very impressive barracks              1   1
+      1  SleptInBedroom                     mediocre bedroom                      1   1
+      2  AteInImpressiveDiningRoom          decent dining room                    1   1
+      2  HospitalPatientRoomStats           somewhat impressive hospital               
+      2  HumanLeatherApparelHappy           human leather {0}                          
+      2  JoyActivityInImpressiveRecRoom     decent rec room                       1   1
+      2  PrisonBarracks                     somewhat impressive barracks               
+      2  PrisonCell                         decent prison cell                         
+      2  PyromaniacHappy                    pyromaniac has incendiary weapon           
+      2  PyromaniacNearFire                 beautiful fire                            4
+      2  ReleasedHealthyPrisoner            prisoner released                     6   5
+      2  SleptInBarracks                    extremely impressive barracks         1   1
+      2  SleptInBedroom                     decent bedroom                        1   1
+      3  Ascetic                            ascetic has mediocre bedroom               
+      3  AteInImpressiveDiningRoom          slightly impressive dining room       1   1
+      3  DrugDesireFascinationSatisfied     chemical comfort                           
+      3  DrugDesireInterestSatisfied        chemical satisfaction                      
+      3  HospitalPatientRoomStats           very impressive hospital                   
+      3  JoyActivityInImpressiveRecRoom     slightly impressive rec room          1   1
+      3  PrisonBarracks                     very impressive barracks                   
+      3  PrisonCell                         slightly impressive prison cell            
+      3  SleptInBarracks                    unbelievably impressive barracks      1   1
+      3  SleptInBedroom                     slightly impressive bedroom           1   1
+      3  UndergrounderIndoors               undergrounder indoors                      
+      4  Ascetic                            ascetic has dull bedroom                   
+      4  AteInImpressiveDiningRoom          somewhat impressive dining room       1   1
+      4  DefeatedInsectHive                 defeated insect hive                 10   5
+      4  DefeatedMechCluster                defeated mech cluster                10   5
+      4  HarvestedOrgan_Bloodlust           bloodlust organ harvested             4    
+      4  HospitalPatientRoomStats           extremely impressive hospital              
+      4  HumanLeatherApparelHappy           human leather {0} (+1)                     
+      4  JoyActivityInImpressiveRecRoom     somewhat impressive rec room          1   1
+      4  KnowBuriedInSarcophagus            buried in sarcophagus                 8   4
+      4  LoveReading                        I love reading                             
+      4  NeedComfort                        comfortable                                
+      4  Nuzzled                            nuzzled                               1   3
+      4  PrisonBarracks                     extremely impressive barracks              
+      4  PrisonCell                         impressive prison cell                     
+      4  ProsthophileHappy                  body modder pleased                        
+      4  SleptInBarracks                    wondrously impressive barracks        1   1
+      4  SleptInBedroom                     impressive bedroom                    1   1
+      4  UndergrounderUnderground           underground                                
+      5  Ascetic                            ascetic has awful bedroom                  
+      5  AteFineMeal                        ate fine meal                         1    
+      5  AteInImpressiveDiningRoom          very impressive dining room           1   1
+      5  BondedAnimalMaster                 master of {0}                              
+      5  BondedAnimalMaster                 {0}'s master                               
+      5  EncouragingSpeech                  encouraging speech                    8  10
+      5  HospitalPatientRoomStats           unbelievably impressive hospital           
+      5  JoyActivityInImpressiveRecRoom     very impressive rec room              1   1
+      5  KindWordsMood                      kind words                            2  10
+      5  MasochistPain                      masochist in minor pain                    
+      5  NeedBeauty                         pretty environment                         
+      5  NeedJoy                            recreation satisfied                       
+      5  NeedRoomSize                       spacious interior                          
+      5  NewColonyHope                      initial hope                          8    
+      5  PrisonBarracks                     unbelievably impressive barracks           
+      5  PrisonCell                         very impressive prison cell                
+      5  PsychicEmanatorSoothe              psychic emanator soothe                    
+      5  SleptInBedroom                     very impressive bedroom               1   1
+      5  TravelAnticipation                 eager to travel                            
+      6  AteInImpressiveDiningRoom          extremely impressive dining room      1   1
+      6  DrugDesireFascinationSatisfied     chemical satisfaction                      
+      6  HospitalPatientRoomStats           wondrously impressive hospital             
+      6  HumanLeatherApparelHappy           human leather {0} (+2)                     
+      6  JoyActivityInImpressiveRecRoom     extremely impressive rec room         1   1
+      6  LoveReading                        I really love reading                      
+      6  MoodOffsetOptimist                 optimist                                   
+      6  NeedComfort                        quite comfortable                          
+      6  Nuzzled                            nuzzled                               1   3
+      6  PrisonBarracks                     wondrously impressive barracks             
+      6  PrisonCell                         extremely impressive prison cell           
+      6  SkillBookPassion                   interesting textbook                       
+      6  SleptInBedroom                     extremely impressive bedroom          1   1
+      7  AteInImpressiveDiningRoom          unbelievably impressive dining roo    1   1
+      7  JoyActivityInImpressiveRecRoom     unbelievably impressive rec room      1   1
+      7  PrisonCell                         unbelievably impressive prison cel         
+      7  ProsthophileHappy                  body modder quite pleased                  
+      7  SleptInBedroom                     unbelievably impressive bedroom       1   1
+      8  AteInImpressiveDiningRoom          wondrously impressive dining room     1   1
+      8  AttendedConcert                    attended concert                     10  10
+      8  AttendedParty                      attended party                       10  10
+      8  DoingPassionateWork                minor passion for my work                  
+      8  GotSomeLovin                       got some lovin'                       3  10
+      8  HeldConcert                        held concert                         10  10
+      8  HumanLeatherApparelHappy           human leather {0} etc                      
+      8  JoyActivityInImpressiveRecRoom     wondrously impressive rec room        1   1
+      8  NeedComfort                        extremely comfortable                      
+      8  PrisonCell                         wondrously impressive prison cell          
+      8  PyroUsed                           used flame weapon                  0.333   1
+      8  SleptInBedroom                     wondrously impressive bedroom         1   1
+      8  WitnessedDeathBloodlust            witnessed death with bloodlust        4   5
+      9  ProsthophileHappy                  body modder delighted                      
+     10  AnestheticHigh                     anesthetic wooziness                       
+     10  DebugGood                          debug good thought                  1.0 100
+     10  DefeatedHostileFactionLeader       defeated hostile leader {0}           6   5
+     10  InspirationalSpeech                inspirational speech                  8  10
+     10  MasochistPain                      masochist in serious pain                  
+     10  NeedBeauty                         beautiful environment                      
+     10  NeedComfort                        luxuriantly comfortable                    
+     10  NeedJoy                            recreation fully satisfied                 
+     10  NewColonyOptimism                  initial optimism                      8    
+     10  PawnWithBadOpinionDied             my rival {0} died                    10   5
+     10  PawnWithBadOpinionLost             my rival {0} lost                    10   5
+     10  SkillBookPassion                   amazing textbook                           
+     10  TravelAnticipation                 excited to travel                          
+     11  ProsthophileHappy                  body modder enchanted                      
+     12  AteLavishMeal                      ate lavish meal                       1    
+     12  KilledHumanlikeBloodlust           killed someone                        4   5
+     12  MoodOffsetSanguine                 sanguine                                   
+     12  OnDuty                             on duty                              25   1
+     12  ProsthophileHappy                  body modder overjoyed                      
+     13  ProsthophileHappy                  machine body is complete                   
+     14  Aurora                             beautiful aurora                           
+     14  DoingPassionateWork                burning passion for my work                
+     15  ArtifactMoodBoost                  strange feeling                     1.0   3
+     15  AteHumanlikeMeatAsIngredientCannibal cooked cannibalism                    1    
+     15  FreedFromSlavery                   freed from slavery                   20   1
+     15  MasochistPain                      masochist in intense pain                  
+     15  NeedBeauty                         gorgeous environment                       
+     16  NightOwlDuringTheNight             night owl at night                         
+     16  PsychicDrone                       psychic soothe                             
+     18  Rescued                            rescued                              30   5
+     18  RescuedRelative                    rescued {0}                          30   5
+     20  AteHumanlikeMeatDirectCannibal     raw cannibalism                       1    
+     20  AttendedWedding                    attended wedding                   10.0  10
+     20  HappyNude                          happily nude                               
+     20  MasochistPain                      masochist in mind-shattering pain          
+     30  Joywire                            joywire                                    
+     40  Catharsis                          catharsis                             3   5
+     40  GotMarried                         got married to {0}                 30.0   1

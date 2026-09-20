@@ -123,7 +123,11 @@ const TECH_ORDER = [
 ];
 
 /** Animals a lone bow hunter can take without real risk. Matched against the pawn kind label. */
-const SMALL_GAME = ["squirrel", "hare", "rat", "chinchilla", "turkey", "chicken", "duck", "guinea pig", "raccoon", "capybara", "muffalo calf", "tortoise", "snake", "cobra", "iguana", "monkey", "cat"];
+const SMALL_GAME = ["squirrel", "hare", "rat", "chinchilla", "turkey", "chicken", "duck", "guinea pig", "raccoon", "capybara", "muffalo calf", "tortoise", "snake", "cobra", "iguana", "monkey", "cat",
+  // Birds. Every one of these was missing, and on the map this colony landed on the two nearest
+  // animals to the base were a quail and a bluebird, so a starving founder was told there was no
+  // safe game within seventy five cells while breakfast stood twenty cells away.
+  "quail", "bluebird", "sparrow", "crow", "pigeon", "goose", "duck", "gull", "emu", "ostrich", "cassowary", "chinchilla", "boomrat"];
 /** Tiny game an unarmed colonist can safely beat to death when there is nothing else to eat. */
 const TINY_GAME = [
   "squirrel", "rat", "hare", "rabbit", "chinchilla", "chicken", "duck", "guinea pig", "turkey",
@@ -149,6 +153,9 @@ const IDLE_JOBS = new Set(["Wait", "Wait_Wander", "Wait_MaintainPosture", "GotoW
 export class ColonyAgent {
   constructor(options = {}) {
     this.speed = options.speed ?? 1;
+    // Pinned only when the caller asked for a specific speed on the command line.
+    this.autoSpeed = options.autoSpeed ?? true;
+    this.lastSpeed = null;
     this.stepMs = options.stepMs ?? 700;
     this.combatMs = options.combatMs ?? 250;
     this.saveDaily = options.saveDaily ?? true;
@@ -363,7 +370,9 @@ export class ColonyAgent {
     this.openJournal(snap);
     const colonists = (snap.colonists ?? []).filter((c) => !c.dead);
     const hostiles = snap.hostiles ?? [];
-    const resources = snap.resources ?? {};
+    // Counts loose logs and steel around the base as well as stockpiled material, because a
+    // blueprint is served just as well by a log lying where the tree fell.
+    const resources = await this.trueResources(snap);
     const day = Math.floor((snap.tick ?? 0) / 60000) + 1;
     if (this.every("built-scan", 6)) {
       try {
@@ -394,7 +403,15 @@ export class ColonyAgent {
     }
     if (this.inCombat) await this.endCombat(colonists);
 
-    if (snap.paused || snap.speed !== this.speed) await api.tryPost("/speed", { speed: this.speed });
+    // Adaptive: fast through the grind, back to 1 the moment anything needs a decision.
+    const want = this.autoSpeed ? this.desiredSpeed(colonists, snap, threats) : this.speed;
+    if (snap.paused || snap.speed !== want) {
+      await api.tryPost("/speed", { speed: want });
+      if (want !== this.lastSpeed) {
+        this.log(`Speed ${want}x: ${this.speedReason}.`);
+        this.lastSpeed = want;
+      }
+    }
 
     // 1. Colonist needs, threats and letters are always on. Everything else is gated by the
     //    current phase.
@@ -418,6 +435,24 @@ export class ColonyAgent {
       await this.narrate(`phase-${phase}`, "new objective", `${this.phaseReason}`, 60000);
     }
 
+    // Whatever the phase, nobody is left standing drafted in peacetime.
+    if (threats.length === 0 && this.every("undraft", 4)) await this.endMeleeHunt(colonists, threats);
+
+    // Blueprints go down in every phase, including the food phase.
+    //
+    // This is the bug that ended four colonies with no house. Placing buildings lived only in
+    // the build phases, and a colony of one is under the forty five percent hunger line most of
+    // the time, so the phase was "food" almost continuously and manageBase ran once in an entire
+    // run. No campfire was ever placed, which meant the cheap-things gate never opened, which
+    // meant no room was ever laid out. The founder cut wood he was never asked to use.
+    //
+    // Deciding WHAT to order and deciding WHAT TO DO FIRST are different jobs. The work
+    // priorities already answer the second one, and they answer it every time the colonist picks
+    // up a new job rather than once per phase. So the board is kept stocked here unconditionally,
+    // and a hungry colonist simply eats before it builds, which is what the priorities are for.
+    await this.maybeReplan(colonists, snap, resources, threats);
+    if (this.every("build", 8)) await this.manageBase(colonists, resources);
+
     switch (phase) {
       case "food":
         // Nothing but calories. Cutting trees and harvesting berries are the same work type, so
@@ -429,10 +464,18 @@ export class ColonyAgent {
         // other cancelled them to protect the foraging, and with the colonist standing idle
         // between them the pair thrashed every few seconds and issued hundreds of dead orders.
         // It is one decision now, made here, from how much food is actually in store.
-        const starving = (this.foodDays ?? 0) < 1.0 || (this.hungriest ?? 1) < 0.35;
-        if (starving) {
+        // Twenty wood is a campfire, and a campfire is the difference between a cooked meal and
+        // "ate corpse", which is minus twelve mood and the single largest thing holding this
+        // colony at its break threshold. So chopping is only suspended in a real emergency, when
+        // someone is genuinely close to collapsing, and not merely because food is short: at
+        // forty percent fed with berries in the pile, an hour with an axe is worth more than
+        // another hour of picking.
+        const collapsing = (this.hungriest ?? 1) < 0.28;
+        const built = this.builtDefs ?? new Set();
+        const needsFire = !built.has("Campfire") && (resources.WoodLog ?? 0) < 25;
+        if (collapsing && !needsFire) {
           if (this.every("clear-chop", 10)) await this.clearWoodDesignations();
-        } else if ((resources.WoodLog ?? 0) < 30 && this.every("wood-for-bow", 12)) {
+        } else if (((resources.WoodLog ?? 0) < 30 || needsFire) && this.every("wood-for-fire", 10)) {
           await this.manageWood(resources);
         }
         if (this.every("food", 3)) await this.manageFood(colonists, snap, resources);
@@ -460,12 +503,10 @@ export class ColonyAgent {
       case "basics":
         // Campfire and a bed. Cheap, fast, and they stop the mood spiral before it starts.
         if (this.every("wood", 8)) await this.manageWood(resources);
-        if (this.every("build", 5)) await this.manageBase(colonists, resources);
         if (this.every("food", 10)) await this.manageFood(colonists, snap, resources);
         break;
 
       case "comfort":
-        if (this.every("build", 5)) await this.manageBase(colonists, resources);
         if (this.every("wood", 12)) await this.manageWood(resources);
         if (this.every("food", 10)) await this.manageFood(colonists, snap, resources);
         break;
@@ -481,14 +522,12 @@ export class ColonyAgent {
 
       case "house":
         if (this.every("wood", 8)) await this.manageWood(resources);
-        if (this.every("build", 5)) await this.manageBase(colonists, resources);
         if (this.every("food", 10)) await this.manageFood(colonists, snap, resources);
         break;
 
       case "farm":
         if (this.every("farm", 10)) await this.manageFarms(colonists.length);
         if (this.every("food", 8)) await this.manageFood(colonists, snap, resources);
-        if (this.every("build", 15)) await this.manageBase(colonists, resources);
         break;
 
       case "grow":
@@ -590,10 +629,18 @@ export class ColonyAgent {
     // is 45 wood and removes a mood penalty every single night; a hut is 85 wood and several
     // hours of construction. One run chopped 224 wood and still had no house, because the walls
     // were started before the cheap things that actually keep a colonist alive and sane.
+    // A field of ripening rice is food, even though none of it is in a stockpile yet. Counting
+    // only what is stored pinned the colony in the food phase with a fed colonist, twenty seven
+    // rice plants in the ground and no house, because stored nutrition read zero and always
+    // would until the first harvest came in.
+    const cropDays = (this.sownCrops ?? 0) * 0.28 / Math.max(1, colonists.length * 1.6);
+    const supply = daysOfFood + Math.min(cropDays, 4);
     this.foodDays = daysOfFood;
+    this.cropDays = cropDays;
     this.hungriest = hungriest;
-    if (hungriest < 0.45 || daysOfFood < 1.5) {
-      this.phaseReason = `Food first: the hungriest colonist is at ${Math.round(hungriest * 100)} percent with ${daysOfFood.toFixed(1)} days stored.`;
+    if (hungriest < 0.45 || supply < 1.5) {
+      this.phaseReason = `Food first: the hungriest colonist is at ${Math.round(hungriest * 100)} percent, ${daysOfFood.toFixed(1)} days stored` +
+        (cropDays > 0 ? ` and about ${cropDays.toFixed(1)} more standing in the fields.` : ".");
       return "food";
     }
     // House, bed, food, table, in that order once there is a survival floor of food.
@@ -631,7 +678,7 @@ export class ColonyAgent {
   }
 
   hasAnyBed(built) {
-    for (const def of built) if (/^(Bed|DoubleBed|RoyalBed|SleepingSpot|Bedroll)/.test(def)) return true;
+    for (const def of built) if (/^(Bed|DoubleBed|RoyalBed|Bedroll)/.test(def)) return true;
     return false;
   }
 
@@ -1171,12 +1218,22 @@ export class ColonyAgent {
     const hungriest = Math.min(...colonists.map((c) => c.needs?.food ?? 1));
     const starving = hungriest < 0.25 && nutrition < 2;
 
+    try {
+      const sown = await Promise.all(["Plant_Rice", "Plant_Potato", "Plant_Corn"].map((d) =>
+        api.get(`/things?def=${d}&limit=300`).catch(() => ({}))));
+      this.sownCrops = sown.reduce((n, r) => n + (r.things?.length ?? 0), 0);
+    } catch {}
+
     if (days < 3 || starving) {
       // Armed? Hunt. That is where the calories are. Foraging is the fallback, not the plan.
       const armed = colonists.some((c) => c.weapon && !c.downed);
       if (armed) await this.huntSmallGame(colonists, resources, starving);
       await this.forage(colonists[0]);
-      if (!armed) await this.huntSmallGame(colonists, resources, starving);
+      if (!armed) {
+        await this.huntSmallGame(colonists, resources, starving);
+        await this.meleeHunt(colonists, starving);
+      }
+      await this.endMeleeHunt(colonists);
     }
 
     // Starvation overrides the normal work plan: food work outranks wood and building until
@@ -1193,7 +1250,7 @@ export class ColonyAgent {
       await this.thought("Food buffer restored. Back to the normal work plan.");
     }
     // Make sure the butcher and cook bills exist as soon as there is anything to process.
-    if ((raw > 0 || meat > 0 || starving) && this.every("food-bill", 15)) {
+    if ((raw > 0 || meat > 0 || starving || !this.placed.has("bill-butcher-any")) && this.every("food-bill", 15)) {
       await this.manageBills(resources);
     }
   }
@@ -1207,7 +1264,13 @@ export class ColonyAgent {
   }
 
   async forage(near) {
-    if (!this.every("forage", 12)) return;
+    // Re-designating every twelve turns kept the board permanently full of berry bushes, and
+    // since harvesting outranks sowing during a food emergency the founder never got back to the
+    // rice. On a map whose wild bushes are a third grown, four berries is a tenth of a day's
+    // nutrition and the rice field is nine days of it, three days out. Once a crop is in the
+    // ground, foraging becomes the thing done between sowing jobs rather than instead of them.
+    const cropsGrowing = (this.sownCrops ?? 0) > 0;
+    if (!this.every("forage", cropsGrowing ? 45 : 12)) return;
     // Deliberately not gated on the HarvestPlant count: trees share that designation, so a board
     // full of oaks used to look like a board full of food and suppressed foraging entirely.
     const origin = this.base ?? near;
@@ -1225,9 +1288,11 @@ export class ColonyAgent {
         api.get(`/things?def=${d}&detail=1&limit=400`).catch(() => ({}))));
       const bushes = results
         .flatMap((r) => r.things ?? [])
-        // A wild berry bush yields nothing worth the walk until it is grown. Below about a third
-        // grown RimWorld will not harvest it at all, and the job is cancelled on arrival.
-        .filter((t) => t.x != null && (t.growth ?? 1) >= 0.32)
+        // 0.65, taken from the game's own plant definitions rather than guessed. Every Core
+        // plant sets harvestMinGrowth to 0.65, and RimWorld refuses the harvest job below it:
+        // a bush designated at a third grown is a walk across the map for a cancelled job. The
+        // previous 0.32 here was a guess, and it was wrong.
+        .filter((t) => t.x != null && (t.growth ?? 1) >= 0.65)
         .map((t) => ({ ...t, d: dist(t, origin) }))
         .sort((a, b) => a.d - b.d);
       if (bushes.length === 0) {
@@ -1239,6 +1304,91 @@ export class ColonyAgent {
       if (r && (r.designated ?? 0) > 0) {
         this.stats.orders++;
         await this.thought(`Foraging: ${r.designated} food plants designated, nearest ${Math.round(take[0].d)} cells from the base.`);
+      }
+    } catch {}
+  }
+
+  /**
+   * Hunting with your hands, when there is no bow and no time to make one.
+   *
+   * RimWorld refuses a hunt job to anyone without a ranged weapon, which is correct for the work
+   * board and wrong for a starving colony whose founder has Melee 10. A drafted pawn can walk up
+   * to a quail and kill it, and that is the fastest food on the map: a bow is thirty wood and
+   * several hours of crafting away, while the quail is twenty cells away right now.
+   *
+   * Only small, harmless game, only while genuinely starving, and only with a colonist who will
+   * win. Sending a bad fighter at an animal barehanded is how a colony loses its founder.
+   */
+  async meleeHunt(colonists, starving) {
+    if (!starving) return false;
+    if (!this.every("melee-hunt", 20)) return false;
+    if (colonists.some((c) => c.weapon && !c.downed)) return false;     // a bow exists: hunt properly
+
+    const fighter = colonists.find((c) => !c.downed && !c.drafted &&
+      (c.health?.pct ?? 1) > 0.75 && this.meleePower(c) >= 6);
+    if (!fighter) return false;
+
+    // Kills already on the ground come first. Chasing a third animal thirty cells out while two
+    // carcasses lie unbutchered beside the base is how a hunter starves next to its own meat.
+    try {
+      const near = await api.get(`/things?cat=Item&detail=1&rect=${this.base.x - 20},${this.base.z - 20},41,41&limit=120`);
+      const waiting = (near.things ?? []).filter((t) =>
+        (t.corpse || /corpse/i.test(String(t.label ?? ""))) && !/human|raider|tribal|insect|mech/i.test(`${t.def} ${t.label}`));
+      if (waiting.length >= 2) {
+        if (this.every("hunt-hold", 30)) this.log(`Holding the hunt: ${waiting.length} carcasses still to butcher.`);
+        return false;
+      }
+    } catch {}
+
+    try {
+      const res = await api.get("/pawns?role=wild_animal&limit=200");
+      const prey = (res.pawns ?? [])
+        .filter((a) => !a.dead && !a.downed && a.x != null)
+        .filter((a) => {
+          const kind = (a.kind ?? "").toLowerCase();
+          if (DANGEROUS_GAME.some((d) => kind.includes(d))) return false;
+          return SMALL_GAME.some((sm) => kind.includes(sm));
+        })
+        .map((a) => ({ ...a, d: dist(a, fighter) }))
+        .filter((a) => a.d < 40)
+        .sort((a, b) => a.d - b.d);
+      if (prey.length === 0) return false;
+
+      const target = prey[0];
+      if (this.meleeTarget === target.id && this.turn - (this.meleeSince ?? 0) < 60) return true;
+      this.meleeTarget = target.id;
+      this.meleeSince = this.turn;
+
+      await api.tryPost("/attack", { pawn: fighter.id, target: target.id, draft: true });
+      this.stats.orders++;
+      await this.thought(`${fighter.name} is going after a ${target.kind} bare handed, ${Math.round(target.d)} cells out. Melee ${this.meleePower(fighter)} against a ${target.kind}: that is a meal, and it is faster than carving a bow.`);
+      await this.narrate("melee-hunt", "hunting bare handed", `No weapon and no food, so ${fighter.name} is walking down a ${target.kind} with bare hands. Melee skill ${this.meleePower(fighter)}.`, 180000, { priority: "high" });
+      return true;
+    } catch { return false; }
+  }
+
+  /**
+   * Nobody stays drafted by accident.
+   *
+   * A drafted colonist does not eat, does not sleep and does not work: it stands where it was
+   * put. The founder was left drafted after a hunt order when the agent process restarted and
+   * lost track of the target, and spent the next in-game hours "watching for targets" at nine
+   * percent food while its mood fell from thirty six to twenty one. So this does not depend on
+   * remembering anything: if there is no fight and no live quarry, the draft comes off.
+   */
+  async endMeleeHunt(colonists, threats = []) {
+    try {
+      if (threats.length > 0) return;
+      if (this.meleeTarget) {
+        const still = await api.get(`/thing/${this.meleeTarget}`).catch(() => null);
+        const alive = still && !still.dead && !still.downed;
+        if (alive && this.turn - (this.meleeSince ?? 0) < 90) return;
+        this.meleeTarget = null;
+      }
+      for (const c of colonists) {
+        if (!c.drafted) continue;
+        await api.tryPost("/draft", { pawn: c.id, drafted: false });
+        this.log(`${c.name} was still drafted with nothing to fight; sent back to work.`);
       }
     } catch {}
   }
@@ -1292,15 +1442,44 @@ export class ColonyAgent {
    * observed behaviour across four colonies was exactly that: plant cutting and hauling, almost
    * nothing built.
    */
+  /**
+   * Outstanding chop designations, counted by looking at the trees themselves.
+   *
+   * There is no separate designation for felling: a tree marked for cutting and a berry bush
+   * marked for harvesting both carry HarvestPlant, so the only honest way to ask how much wood
+   * work is queued is to ask the trees.
+   */
+  async pendingTreeDesignations() {
+    try {
+      const treeDefs = ["Plant_TreeOak", "Plant_TreePoplar", "Plant_TreePine", "Plant_TreeBirch",
+                        "Plant_TreeWillow", "Plant_TreeMaple", "Plant_TreeCypress", "Plant_TreeTeak"];
+      const pages = await Promise.all(treeDefs.map((d) =>
+        api.get(`/things?def=${d}&detail=1&limit=300`).catch(() => ({}))));
+      return pages.flatMap((r) => r.things ?? []).filter((t) => t.designation).length;
+    } catch { return 0; }
+  }
+
   async manageWood(resources) {
-    // Never compete with food.
-    if (this.foodEmergency) return;
     const wood = resources.WoodLog ?? 0;
+    const built = this.builtDefs ?? new Set();
+
+    // A food emergency used to switch wood cutting off completely. It sounds right and it nearly
+    // killed this colony: the campfire is twenty wood, and a campfire is cooked food instead of
+    // "ate corpse", which is minus twelve mood and was the largest single line in the founder's
+    // ledger while he sat at nineteen percent mood with no shelter. Twenty wood IS the food fix,
+    // so the emergency only suspends chopping once the fire exists.
+    const needsFire = !built.has("Campfire") && wood < 25;
+    if (this.foodEmergency && !needsFire) return;
+
     const need = this.woodNeeded(resources);
     if (wood >= need) return;
 
-    const pending = await this.pendingDesignations("HarvestPlant");
-    if (pending > 6) return;          // there is already plant work queued; do not pile on
+    // Count trees, not "plant work". Felling a tree and picking a berry are both HarvestPlant
+    // designations, so a forager that had just marked twenty five bushes made this look like a
+    // board full of queued wood work and wood cutting was never designated again. Across a whole
+    // run the colony chopped nothing at all and held twelve wood on day three.
+    const pending = await this.pendingTreeDesignations();
+    if (pending > 6) return;
 
     // About 20 wood per tree, so ask for the shortfall and nothing more.
     const shortfall = need - wood;
@@ -1425,7 +1604,7 @@ export class ColonyAgent {
       return (c.things ?? []).some((t) => {
         const def = String(t.def ?? "");
         // Blueprints and frames are category Ethereal, named Blueprint_<Def> and Frame_<Def>.
-        return String(t.cat ?? "") === "Building" || /^(Blueprint|Frame)_/i.test(def);
+        return (String(t.cat ?? "") === "Building" && def !== "SleepingSpot") || /^(Blueprint|Frame)_/i.test(def);
       });
     } catch { return false; }
   }
@@ -1598,6 +1777,26 @@ export class ColonyAgent {
     } catch {}
   }
 
+  /**
+   * What a room would cost right now, counting only the walls its neighbours have not already
+   * built. Shared walls are most of the saving: the workshop costs ninety wood rather than two
+   * hundred because the great hall already paid for its east side.
+   */
+  estimateRoomCost(room, held) {
+    const doors = new Set(room.doors.map((d) => `${d.x},${d.z}`));
+    let walls = 0, doorCount = 0;
+    for (const [x, z] of ColonyAgent.perimeter(room)) {
+      const key = `${x},${z}`;
+      if (held.has(key)) continue;
+      if (doors.has(key)) doorCount++; else walls++;
+    }
+    if (room.cap) {
+      const capKey = `${this.base.x + room.cap[0]},${this.base.z + room.cap[1]}`;
+      if (!held.has(capKey)) doorCount++;
+    }
+    return walls * 5 + doorCount * 25;
+  }
+
   async buildRoom(room, wood, held) {
     if (this.placed.has(`room-${room.key}`)) return "already";
     await this.clearZoneFor(room);
@@ -1617,7 +1816,7 @@ export class ColonyAgent {
     }
 
     let standingWalls = 0;
-    for (const [x, z] of Agent.perimeter(room)) {
+    for (const [x, z] of ColonyAgent.perimeter(room)) {
       const key = `${x},${z}`;
       const there = held.get(key);
       const wantsDoor = doors.has(key);
@@ -1640,6 +1839,7 @@ export class ColonyAgent {
     const wallCount = items.filter((i) => i.def === "Wall").length;
     const doorCount = items.length - wallCount;
     const cost = wallCount * 5 + doorCount * 25;
+    (this.roomCost ?? (this.roomCost = new Map())).set(room.key, cost);
     if (wood < cost + 15) return { short: cost + 15 - wood, cost };
 
     const r = await api.tryPost("/build/bulk", { items });
@@ -1670,19 +1870,22 @@ export class ColonyAgent {
     // before this one had its one stool placed corner to corner with the table, so nobody ever
     // ate at it and the colony carried "ate without a table" for five days.
     hall: [
-      { key: "table", def: "Table1x2c", x: -2, z: 1, rot: 0, stuff: "WoodLog", wood: 30 },
+      { key: "table", def: "Table1x2c", x: -2, z: 1, rot: 0, stuff: "WoodLog", wood: 28 },
       { key: "stool", def: "Stool", x: -1, z: 1, rot: 3, stuff: "WoodLog", wood: 25 },
+      // A stool is 25 stuff and 450 work. A dining chair is 45 stuff and 8000 work, eighteen
+      // times the labour for the same seat, which is a whole day of a lone colonist's life.
       { key: "stool2", def: "Stool", x: -1, z: 2, rot: 3, stuff: "WoodLog", wood: 25, needPop: 2 },
     ],
     // Cooking and butchering together, away from where anyone sleeps.
     kitchen: [
       { key: "campfire2", def: "Campfire", x: 4, z: 2, wood: 20, replaces: "campfire" },
-      { key: "butchertable", def: "TableButcher", x: 6, z: 2, rot: 0, stuff: "WoodLog", wood: 120 },
+      // 20 wood in the cost list plus 75 stuff, not the 120 this used to guess at.
+      { key: "butchertable", def: "TableButcher", x: 6, z: 2, rot: 0, stuff: "WoodLog", wood: 95 },
       { key: "stove", def: "FueledStove", x: 4, z: 0, rot: 0, steel: 80 },
     ],
     workshop: [
       { key: "craftingspot", def: "CraftingSpot", x: -6, z: 1 },
-      { key: "research", def: "SimpleResearchBench", x: -6, z: -1, rot: 0, stuff: "WoodLog", wood: 100, steel: 25 },
+      { key: "research", def: "SimpleResearchBench", x: -6, z: -1, rot: 0, stuff: "WoodLog", wood: 75, steel: 25 },
       { key: "smithy", def: "ElectricSmithy", x: -7, z: -1, rot: 0, steel: 100, optional: true },
     ],
     bed1: [{ key: "bed1", def: "Bed", x: -4, z: 6, rot: 0, stuff: "WoodLog", wood: 45 }],
@@ -1701,6 +1904,162 @@ export class ColonyAgent {
     prison: [{ key: "prison_bed", def: "Bed", x: 12, z: -10, rot: 0, stuff: "WoodLog", wood: 45 }],
   };
 
+  /**
+   * What the colony actually has, not just what it has tidied away.
+   *
+   * /resources reports stockpiled material. Anything lying where it fell does not count, and a
+   * colony that cuts trees faster than it hauls logs therefore reads as having almost nothing.
+   * This colony held three hundred and twenty nine wood in nine piles around the base while
+   * every build gate in this agent read twelve, so the campfire was never placed, the cheap
+   * things gate never opened, and not one room was ever laid out. Four colonies ended with a
+   * founder sleeping outdoors beside a small forest of his own logs.
+   *
+   * Loose material is perfectly usable: a colonist will carry it to a blueprint. So the gates
+   * count both, and the agent decides on what the colony owns rather than on what it has filed.
+   */
+  async trueResources(snap) {
+    const stockpiled = { ...(snap.resources ?? {}) };
+    const counted = { ...stockpiled };
+    try {
+      const defs = ["WoodLog", "Steel", "Cloth", "Silver", "ComponentIndustrial",
+                    "BlocksGranite", "BlocksMarble", "BlocksSandstone", "BlocksLimestone", "BlocksSlate"];
+      const pages = await Promise.all(defs.map((d) =>
+        api.get(`/things?def=${d}&detail=1&limit=200`).catch(() => ({}))));
+      pages.forEach((page, i) => {
+        const loose = (page.things ?? [])
+          .filter((t) => t.x != null && dist(t, this.base) < 45)
+          .reduce((n, t) => n + (t.count ?? 1), 0);
+        if (loose > 0) counted[defs[i]] = loose;
+      });
+    } catch { return stockpiled; }
+
+    const wood = counted.WoodLog ?? 0, filed = stockpiled.WoodLog ?? 0;
+    if (wood - filed > 40 && this.every("loose-stock", 60)) {
+      this.log(`${wood} wood around the base, ${filed} of it in a pile. Counting all of it: a blueprint is served by a log on the ground just as well.`);
+    }
+    return counted;
+  }
+
+  /**
+   * Decide once, then execute against the decision.
+   *
+   * Until now there was no plan. Every four seconds the agent re-derived everything from nothing,
+   * which is why it designated trees and cancelled them seconds later, picked the farm site three
+   * separate times, and could answer "what are you doing" only with whatever job the colonist
+   * happened to hold. A plan makes those one decision instead of hundreds, and writing it down
+   * makes it checkable: when the house did not get built, the plan is what shows why.
+   *
+   * It is re-made at founding, at each in-game day boundary, and whenever something happens that
+   * genuinely invalidates it. It is pushed to the in-game task board so the stream can read it.
+   */
+  async makePlan(colonists, snap, resources, reason) {
+    const survey = await this.survey();
+    const built = this.builtDefs ?? new Set();
+    const wood = resources.WoodLog ?? 0;
+    const tasks = [];
+    let blocker = null;
+
+    const add = (label, state, note) => tasks.push({ label, state, note });
+
+    // Food first, always, but judged on what the colony can actually reach rather than on what
+    // has been filed into a stockpile.
+    const daysFood = this.foodDays ?? 0;
+    const cropDays = this.cropDays ?? 0;
+    if (daysFood >= 2 || cropDays >= 2) {
+      add("Food secured", "done", `${daysFood.toFixed(1)}d stored${cropDays > 0.1 ? ` +${cropDays.toFixed(1)}d growing` : ""}`);
+    } else if (survey && (survey.wildFoodGrown > 0 || (survey.game ?? []).some((g) => g.safeToHuntBarehanded))) {
+      add("Get food", "doing", `${survey.wildFoodGrown} bushes, ${(survey.game ?? []).filter((g) => g.safeToHuntBarehanded).length} small game`);
+    } else {
+      add("Get food", "blocked", "nothing grown or huntable in range");
+      blocker = "no reachable food";
+    }
+
+    // The cheap survival buildings, in the order they pay back.
+    add("Campfire", built.has("Campfire") ? "done" : (wood >= 20 ? "doing" : "blocked"),
+        built.has("Campfire") ? "cooked meals" : `${wood}/20 wood`);
+    add("Bed", this.hasAnyBed(built) ? "done" : (wood >= 45 ? "doing" : "blocked"),
+        this.hasAnyBed(built) ? null : `${wood}/45 wood`);
+
+    // Then the house, room by room, with the real price of each.
+    const plan = this.roomPlan(colonists.length);
+    try {
+      const held = await this.occupancy();
+      this.roomCost = this.roomCost ?? new Map();
+      for (const room of plan.slice(0, 6)) this.roomCost.set(room.key, this.estimateRoomCost(room, held));
+    } catch {}
+    let roomsShown = 0;
+    for (const room of plan) {
+      if (roomsShown >= 4) break;
+      const done = this.placed.has(`room-${room.key}`);
+      if (done) { add(room.label, "done", null); roomsShown++; continue; }
+      const cost = this.roomCost?.get(room.key);
+      const state = cost && wood < cost ? "blocked" : "doing";
+      add(room.label, state, cost ? `${wood}/${cost} wood` : room.purpose);
+      if (state === "blocked" && !blocker) blocker = `${room.label} needs ${cost - wood} more wood`;
+      roomsShown++;
+      break;                    // one room at a time; the rest are queued
+    }
+    for (const room of plan.slice(roomsShown).slice(0, 3)) {
+      if (this.placed.has(`room-${room.key}`)) continue;
+      add(room.label, "queued", room.purpose);
+    }
+
+    if (survey && survey.unhauledItems > 60) {
+      add("Haul the loose piles", "queued", `${survey.unhauledItems} items on the ground`);
+    }
+    const corpseCount = Object.values(survey?.corpses ?? {}).reduce((a, b) => a + b, 0);
+    if (corpseCount > 0) add("Clear bodies", "doing", `${corpseCount} waiting`);
+
+    const goal = `${colonists.length} of ${POPULATION_TARGET} colonists`;
+    const day = snap.dateString ? String(snap.dateString).slice(0, 26) : `Day ${snap.day ?? "?"}`;
+
+    this.plan = { goal, day, blocker, tasks, madeAt: this.turn, reason };
+    await api.tryPost("/hud/tasks", { goal, day, blocker, tasks });
+    await studio("/api/plan", { goal, day, blocker, tasks, reason });
+    this.journal("plan", { reason, goal, blocker, tasks }, snap);
+
+    const shown = tasks.map((t) => `${t.state === "done" ? "done" : t.state}: ${t.label}${t.note ? ` (${t.note})` : ""}`).join("; ");
+    this.log(`Plan (${reason}) — ${goal}. ${shown}${blocker ? ` | waiting on: ${blocker}` : ""}`);
+    return this.plan;
+  }
+
+  /** One call that describes what is actually within reach, rather than fifteen that each ask for one named thing. */
+  async survey(radius = 45) {
+    try {
+      const b = this.base ?? {};
+      const q = b.x != null ? `?x=${b.x}&z=${b.z}&r=${radius}` : `?r=${radius}`;
+      const s = await api.get(`/survey${q}`);
+      this.lastSurvey = s;
+      return s;
+    } catch { return this.lastSurvey ?? null; }
+  }
+
+  /**
+   * Re-plan when the plan has stopped describing reality: a new day, a new colonist, a fight, a
+   * casualty, or the blocker clearing. Not on a timer, which is what the old loop effectively was.
+   */
+  async maybeReplan(colonists, snap, resources, threats) {
+    const day = snap.day ?? 0;
+    const fingerprint = [
+      day,
+      colonists.length,
+      threats.length > 0 ? "fight" : "calm",
+      colonists.some((c) => c.downed) ? "down" : "up",
+      [...this.placed.keys()].filter((k) => k.startsWith("room-")).length,
+      (this.builtDefs?.has("Campfire") ?? false) ? "fire" : "cold",
+      this.hasAnyBed(this.builtDefs ?? new Set()) ? "bed" : "ground",
+    ].join("|");
+
+    if (fingerprint === this.planFingerprint) return;
+    const reason = !this.planFingerprint ? "first plan"
+      : day !== this.planDay ? `day ${day}`
+      : threats.length > 0 ? "hostiles"
+      : "something finished or broke";
+    this.planFingerprint = fingerprint;
+    this.planDay = day;
+    await this.makePlan(colonists, snap, resources, reason);
+  }
+
   async manageBase(colonists, resources) {
     const b = this.base;
     const wood = resources.WoodLog ?? 0;
@@ -1716,12 +2075,12 @@ export class ColonyAgent {
     if (!built.has("ButcherSpot") && !built.has("TableButcher")) {
       await this.place("butcherspot", "ButcherSpot", b.x + 6, b.z + 2, { force: true });
     }
-    if (wood >= 20 && !built.has("Campfire")) {
+    if (!built.has("Campfire")) {
       if ((await this.place("campfire", "Campfire", b.x + 2, b.z + 2, { force: true })) === "placed") {
         await this.thought("Campfire down: warmth, light and cooked food. It moves into the kitchen once there is a kitchen.");
       }
     }
-    if (wood >= 45 && !this.hasAnyBed(built)) {
+    if (!this.hasAnyBed(built)) {
       await this.place("bed", "Bed", b.x - 1, b.z - 1, { stuff: "WoodLog", rot: 0, force: true });
     }
 
@@ -1745,7 +2104,7 @@ export class ColonyAgent {
 
     // Furniture, but only into rooms that exist. A bed blueprinted where a bedroom has not been
     // built yet is a bed standing in a field.
-    for (const [roomKey, items] of Object.entries(Agent.FURNITURE)) {
+    for (const [roomKey, items] of Object.entries(ColonyAgent.FURNITURE)) {
       if (!this.placed.has(`room-${roomKey}`)) continue;
       for (const it of items) {
         if (it.needPop && colonists.length < it.needPop) continue;
@@ -1828,11 +2187,26 @@ export class ColonyAgent {
     { recipe: "Make_MeleeWeapon_Club", key: "bill-club", wood: 40, minCrafting: 0, label: "club", note: "no skill needed, and far better than fists" },
   ];
 
+  /**
+   * The nearest bench of a kind, not simply the first one the game lists.
+   *
+   * Taking `[0]` put the standing butcher bill on a spot fifty cells away, left over from a base
+   * anchor the colony had already abandoned. The founder killed three animals, the bill existed,
+   * and nothing was ever butchered, because the only bench carrying it was most of a day's walk
+   * from the kills.
+   */
+  async nearestBench(defs) {
+    const found = await Promise.all(defs.map((d) =>
+      api.get(`/things?def=${d}&player=1&limit=30`).catch(() => ({}))));
+    const all = found.flatMap((r) => r.things ?? []).filter((t) => t.x != null);
+    if (all.length === 0) return null;
+    return all.sort((a, b) => dist(a, this.base) - dist(b, this.base))[0];
+  }
+
   async manageBills(resources) {
     const colonistSkills = [...this.skillCache.values()];
     try {
-      const spots = await api.get("/things?def=CraftingSpot&player=1");
-      const spot = (spots.things ?? [])[0];
+      const spot = await this.nearestBench(["ElectricSmithy", "TableSmithy", "CraftingSpot"]);
       if (spot) {
         const info = await api.get(`/thing/${spot.id}`).catch(() => ({}));
         const bills = JSON.stringify(info.bills ?? []).toLowerCase();
@@ -1863,12 +2237,16 @@ export class ColonyAgent {
     // Butchering is the step that turns a hunted animal into food. Without it, corpses rot
     // where they fall and the colony starves next to its own kills.
     try {
-      const butchers = await api.get("/things?def=ButcherSpot&player=1");
-      const tables = await api.get("/things?def=TableButcher&player=1").catch(() => ({}));
-      const bench = (tables.things ?? [])[0] ?? (butchers.things ?? [])[0];
-      if (bench && !this.placed.has("bill-butcher")) {
+      const bench = await this.nearestBench(["TableButcher", "ButcherSpot"]);
+      // Keyed on the bench, so moving the colony or upgrading the spot to a table re-queues the
+      // bill on the one that is actually beside the kills.
+      if (bench && !this.placed.has(`bill-butcher-${bench.id}`)) {
         const r = await api.tryPost("/bill", { thing: bench.id, recipe: "ButcherCorpseFlesh", mode: "forever" });
-        if (r) { this.placed.set("bill-butcher", {}); await this.thought("Standing butcher bill set. Every kill now becomes meat and leather."); }
+        if (r) {
+          this.placed.set(`bill-butcher-${bench.id}`, {});
+          this.placed.set("bill-butcher-any", {});
+          await this.thought(`Standing butcher bill set on the ${bench.def === "TableButcher" ? "butcher table" : "butcher spot"} ${Math.round(dist(bench, this.base))} cells from the base. Every kill now becomes meat and leather.`);
+        }
       }
     } catch {}
 
@@ -1995,12 +2373,22 @@ export class ColonyAgent {
       // the only way to hunt, which is the actual food supply. Burying Construction during a
       // food emergency meant the last founder queued a bow bill on a crafting spot that was
       // never built, and starved beside 265 wood.
-      // PlantCutting above Growing, not level with it. Harvesting a wild berry bush is
-      // PlantCutting and pays in minutes; sowing is Growing and pays in days. Levelling them let
-      // a founder at twenty percent food walk twenty nine cells to sow healroot, which is
-      // medicine, while sixteen designated berry bushes stood ten cells from the door.
-      return { ...base, PlantCutting: 1, Growing: 2, Cooking: 1, Hunting: 2, Construction: 2,
-               Crafting: 2, Hauling: 4, Mining: 4, Research: 4, Tailoring: 4, Smithing: 4 };
+      // Which of the two plant work types leads depends on what there is to pick, and the
+      // game's own WorkGiverDefs decide that: GrowerHarvest sits under Growing while PlantsCut
+      // sits under PlantCutting. So a ripe crop is Growing work and a designated wild bush is
+      // PlantCutting work, and burying Growing during a food emergency would suppress the
+      // harvest of the very field that ends it.
+      //
+      // Ripe crops in the ground: Growing leads. Nothing ripe yet: PlantCutting leads, so the
+      // colonist picks bushes rather than walking off to sow something that pays in days.
+      const ripe = (this.lastSurvey?.cropsRipe ?? 0) > 0;
+      return { ...base,
+               PlantCutting: ripe ? 2 : 1,
+               Growing: ripe ? 1 : 2,
+               Cooking: 1, Hunting: 2, Construction: 2, Crafting: 2,
+               // Hauling stays low without starving a build site: Construction carries its own
+               // ConstructDeliverResourcesToBlueprints giver, so the builder fetches its own wood.
+               Hauling: 4, Mining: 4, Research: 4, Tailoring: 4, Smithing: 4 };
     }
     if (this.weaponRush) {
       return { ...base, Crafting: 1, Hauling: 3, Construction: 3, Mining: 4, Research: 4 };
@@ -2046,11 +2434,58 @@ export class ColonyAgent {
    * schedule they carry the penalty instead, every day, for the whole colony's life. The founder
    * of this run is one, so it is worth a call on the first day rather than a note for later.
    */
+  /**
+   * How fast the game should be running right now.
+   *
+   * Speed is a trade between watching and waiting. Felling a forest, sowing a field and hauling
+   * a hundred logs are long, dull jobs where nothing needs deciding for minutes at a time, and
+   * running those at 1x wastes the run. A raid, a mental break, a bleeding colonist or a letter
+   * asking a question are the opposite: at 3x they play out entirely between two decisions, and
+   * a colony was already lost that way, one colonist dead and one kidnapped with no order issued
+   * during either event.
+   *
+   * So the rule is simple: fast while the colony is grinding, slow the moment anything happens.
+   */
+  desiredSpeed(colonists, snap, threats) {
+    const slow = (why) => { this.speedReason = why; return 1; };
+
+    if (threats.length > 0) return slow("hostiles on the map");
+    if (colonists.some((c) => c.downed || c.dead)) return slow("someone is down");
+    if (colonists.some((c) => c.mentalState)) return slow("a colonist has broken");
+    if ((snap.pendingLetters ?? 0) > 0) return slow("a letter is waiting on a decision");
+    if (this.tradeOpen) return slow("a trader is here");
+
+    // Close to a break, or close to starving: both are a few in-game minutes from a crisis.
+    const worstMood = Math.min(...colonists.map((c) => (c.needs?.mood ?? 1) - (c.moodBreakThreshold ?? 0.35)));
+    if (worstMood < 0.08) return slow("mood is near the break threshold");
+    if ((this.hungriest ?? 1) < 0.30) return slow("someone is close to starving");
+    if (colonists.some((c) => (c.health?.pct ?? 1) < 0.85)) return slow("someone is hurt");
+
+    // Nothing is happening and the colony has a long job in front of it.
+    const grinding = colonists.every((c) => {
+      const job = `${c.job?.def ?? ""} ${c.job?.report ?? ""}`.toLowerCase();
+      return /harvest|cut|plant|sow|haul|mine|construct|build|smooth|butcher|cook|deliver|repair|clean|research|craft|sleep|lay/.test(job);
+    });
+    if (grinding) { this.speedReason = "routine work, nothing to decide"; return 3; }
+
+    this.speedReason = "watching";
+    return 2;
+  }
+
   async manageSchedules(colonists) {
     if (!this.every("schedule", 60)) return;
     for (const c of colonists) {
       if (c.downed || c.dead) continue;
-      const owl = (c.traits ?? []).some((t) => /night\s*owl/i.test(String(t)));
+      // Traits are not in the per-turn snapshot, only in the detailed pawn record. Reading them
+      // off the snapshot meant every colonist looked traitless, so the owl branch never ran and
+      // the day schedule was applied to a night owl instead, which is the penalty rather than
+      // the bonus.
+      let traits = c.traits;
+      if (!traits) {
+        // /pawn/{id} answers with the pawn's own fields at the top level, not wrapped.
+        try { const r = await api.get(`/pawn/${c.id}?detail=1`); traits = r?.traits ?? r?.pawn?.traits ?? []; } catch { traits = []; }
+      }
+      const owl = (traits ?? []).some((t) => /night\s*owl/i.test(String(t)));
       const key = `sched-${c.id}-${owl ? "owl" : "day"}`;
       if (this.placed.has(key)) continue;
 
@@ -2271,7 +2706,7 @@ export class ColonyAgent {
   async manageStorage(colonists) {
     if (!this.every("storage", 20)) return;
     const b = this.base;
-    for (const store of Agent.STORES) {
+    for (const store of ColonyAgent.STORES) {
       if (this.zones.has(store.key)) continue;
       if (store.room && !this.placed.has(store.room)) continue;
       const rect = store.rect(b);
@@ -2697,7 +3132,8 @@ async function main() {
   const opt = { speed: 1, stepMs: 700, combatMs: 250, saveDaily: true, quiet: false };
   let turns = Infinity;
   for (const a of args) {
-    if (a.startsWith("--speed=")) opt.speed = parseInt(a.split("=")[1], 10);
+    if (a.startsWith("--speed=")) { opt.speed = parseInt(a.split("=")[1], 10); opt.autoSpeed = false; }
+    else if (a === "--auto-speed") opt.autoSpeed = true;
     if (a.startsWith("--step-ms=")) opt.stepMs = parseInt(a.split("=")[1], 10);
     if (a.startsWith("--combat-ms=")) opt.combatMs = parseInt(a.split("=")[1], 10);
     if (a.startsWith("--turns=")) turns = parseInt(a.split("=")[1], 10);

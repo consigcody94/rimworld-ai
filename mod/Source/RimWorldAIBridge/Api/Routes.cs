@@ -412,6 +412,136 @@ namespace RimWorldAIBridge
                 return new Dictionary<string, object> { { "type", type }, { "count", results.Count }, { "defs", results } };
             });
 
+            Doc(s, "GET", "/survey", "What is actually within reach, counted from the world rather than from the stockpile ledger. ?x=&z=&r=45 (defaults to the first colonist). Returns materials with their true totals including loose stacks, food, corpses by kind, huntable animals with distance and body size, grown trees, growing crops, threats, and unclaimed items. This is the route to read before deciding anything: /resources counts only what has been hauled into a stockpile, so a colony with three hundred wood lying where the trees fell reads as having none.", r =>
+            {
+                var map = Lookup.MapFrom(r);
+                IntVec3 origin;
+                var firstColonist = map.mapPawns.FreeColonistsSpawned.FirstOrDefault();
+                if (r.HasArg("x") || r.HasArg("z")) origin = new IntVec3(r.QInt("x", map.Center.x), 0, r.QInt("z", map.Center.z));
+                else origin = firstColonist?.Position ?? map.Center;
+                int radius = Math.Max(5, Math.Min(120, r.QInt("r", 45)));
+                float r2 = radius * radius;
+                bool Near(IntVec3 c) => (c - origin).LengthHorizontalSquared <= r2;
+
+                var materials = new Dictionary<string, int>();
+                var food = new Dictionary<string, int>();
+                var corpses = new Dictionary<string, int>();
+                var weapons = new List<Dictionary<string, object>>();
+                var apparel = 0;
+                int forbidden = 0, unhauled = 0;
+
+                foreach (var t in map.listerThings.AllThings)
+                {
+                    if (t == null || !t.Spawned || !Near(t.Position)) continue;
+                    try
+                    {
+                        if (t is Corpse corpse)
+                        {
+                            string kind = corpse.InnerPawn?.RaceProps?.Humanlike == true ? "humanlike"
+                                : corpse.InnerPawn?.RaceProps?.Insect == true ? "insect"
+                                : corpse.InnerPawn?.RaceProps?.IsMechanoid == true ? "mechanoid" : "animal";
+                            corpses[kind] = corpses.TryGetValue(kind, out int n) ? n + 1 : 1;
+                            continue;
+                        }
+                        if (t.def.category != ThingCategory.Item) continue;
+                        int stack = t.stackCount;
+                        if (t.IsForbidden(Faction.OfPlayer)) forbidden++;
+
+                        // Order matters, and one predicate here is a trap. ThingDef.IsWeapon is
+                        // true for WoodLog: a log counts as an improvised melee weapon, so asking
+                        // "is this a weapon" before "is this a building material" filed two
+                        // hundred and sixty four logs under weapons and reported the colony as
+                        // having no wood. Something a colonist can pick up and swing is only a
+                        // weapon here if it is actually equipment; stuff is stuff.
+                        bool isStuff = t.def.IsStuff;
+                        bool isEquipment = t.def.equipmentType != EquipmentType.None && !isStuff;
+                        if (t.def.IsNutritionGivingIngestible) food[t.def.defName] = (food.TryGetValue(t.def.defName, out int f) ? f : 0) + stack;
+                        else if (isEquipment) weapons.Add(new Dictionary<string, object> { { "def", t.def.defName }, { "label", t.LabelShort }, { "x", t.Position.x }, { "z", t.Position.z } });
+                        else if (t.def.IsApparel) apparel++;
+                        else materials[t.def.defName] = (materials.TryGetValue(t.def.defName, out int m) ? m : 0) + stack;
+                        // Sitting outside any stockpile is exactly what /resources cannot see.
+                        if (t.Position.GetZone(map) == null && t.def.EverHaulable) unhauled += stack;
+                    }
+                    catch { }
+                }
+
+                // Plants worth work: trees with wood in them, and wild food that is grown enough
+                // to be worth the walk. Ungrown plants are noise, and the agent used to designate
+                // ornamental bushes because it could not tell the difference.
+                int treesGrown = 0, wildFoodGrown = 0, cropsSown = 0, cropsRipe = 0;
+                foreach (var t in map.listerThings.AllThings)
+                {
+                    var plant = t as Plant;
+                    if (plant == null || !Near(plant.Position)) continue;
+                    try
+                    {
+                        bool grown = plant.Growth >= 0.55f;
+                        if (plant.def.plant?.IsTree == true) { if (grown) treesGrown++; }
+                        else if (plant.def.plant?.harvestedThingDef?.IsNutritionGivingIngestible == true)
+                        {
+                            if (plant.def.plant.Sowable && plant.Position.GetZone(map) is Zone_Growing)
+                            { cropsSown++; if (plant.HarvestableNow) cropsRipe++; }
+                            else if (plant.Growth >= 0.32f) wildFoodGrown++;
+                        }
+                    }
+                    catch { }
+                }
+
+                var game = new List<Dictionary<string, object>>();
+                var threats = new List<Dictionary<string, object>>();
+                foreach (var p in map.mapPawns.AllPawnsSpawned)
+                {
+                    if (p == null || p.Dead || !Near(p.Position)) continue;
+                    try
+                    {
+                        if (p.HostileTo(Faction.OfPlayer) && !p.Downed)
+                        {
+                            threats.Add(new Dictionary<string, object>
+                            {
+                                { "id", p.thingIDNumber }, { "label", p.LabelShortCap },
+                                { "humanlike", p.RaceProps?.Humanlike == true },
+                                { "distance", (int)p.Position.DistanceTo(origin) },
+                            });
+                            continue;
+                        }
+                        if (p.RaceProps?.Animal != true || p.Faction != null) continue;
+                        // Everything the colony could eat, described so the agent never needs a
+                        // hardcoded list of animal names to recognise a meal.
+                        game.Add(new Dictionary<string, object>
+                        {
+                            { "id", p.thingIDNumber }, { "kind", p.kindDef?.defName }, { "label", p.LabelShortCap },
+                            { "distance", (int)p.Position.DistanceTo(origin) },
+                            { "bodySize", Math.Round(p.BodySize, 2) },
+                            { "meat", (int)p.GetStatValue(StatDefOf.MeatAmount) },
+                            { "predator", p.RaceProps.predator },
+                            { "manhunterChance", Math.Round(p.RaceProps.manhunterOnDamageChance, 2) },
+                            { "safeToHuntBarehanded", !p.RaceProps.predator && p.BodySize <= 0.5f && p.RaceProps.manhunterOnDamageChance <= 0.15f },
+                        });
+                    }
+                    catch { }
+                }
+                game = game.OrderBy(d => (int)d["distance"]).Take(12).ToList();
+
+                return new Dictionary<string, object>
+                {
+                    { "origin", new Dictionary<string, object> { { "x", origin.x }, { "z", origin.z } } },
+                    { "radius", radius },
+                    { "materials", materials },
+                    { "food", food },
+                    { "unhauledItems", unhauled },
+                    { "forbiddenItems", forbidden },
+                    { "corpses", corpses },
+                    { "weaponsOnGround", weapons.Take(8).ToList() },
+                    { "apparelOnGround", apparel },
+                    { "treesGrown", treesGrown },
+                    { "wildFoodGrown", wildFoodGrown },
+                    { "cropsSown", cropsSown },
+                    { "cropsRipe", cropsRipe },
+                    { "game", game },
+                    { "threats", threats },
+                };
+            });
+
             Doc(s, "GET", "/fertility", "Find ground worth farming. Scans a rect and returns the best blocks of sowable soil, ranked by average fertility, so crops go on rich soil rather than gravel. ?x=&z=&w=60&h=60&block=6&min=0.9&limit=8. Rich soil is 1.4, ordinary soil 1.0, gravel 0.7; below about 0.7 nothing worth eating will grow.", r =>
             {
                 var map = Lookup.MapFrom(r);

@@ -330,6 +330,28 @@ namespace RimWorldAIBridge
                 return Bridge.Ok("results", results);
             });
 
+            Doc(s, "ANY", "/hud/tasks", "Put the agent's plan on screen for the stream. {goal, day, blocker, tasks:[{label, state:done|doing|blocked|queued, note}]}. Up to nine tasks are shown, in the order given. Sending an empty task list with no goal hides the panel. Everything here is drawn as untrusted text: markup is stripped, exactly as viewer chat is.", r =>
+            {
+                var list = new List<PlanTask>();
+                var raw = Json.List(r.Body, "tasks");
+                if (raw != null)
+                {
+                    foreach (var o in raw)
+                    {
+                        var d = o as Dictionary<string, object>;
+                        if (d == null) continue;
+                        list.Add(new PlanTask
+                        {
+                            Label = Json.Str(d, "label"),
+                            State = Json.Str(d, "state") ?? "queued",
+                            Note = Json.Str(d, "note"),
+                        });
+                    }
+                }
+                TaskBoardHUD.Set(r.Arg("goal"), r.Arg("day"), r.Arg("blocker"), list);
+                return Bridge.Ok("shown", TaskBoardHUD.Count);
+            });
+
             Doc(s, "ANY", "/zone", "Create a zone. {type: stockpile|dumping|growing, cells|rect, plant:ThingDef (growing), priority:Low|Normal|Preferred|Important|Critical (stockpile), label, filter}. The filter shapes what a stockpile accepts: {clear:true, categories:[ThingCategoryDef], allow:[ThingDef], deny:[ThingDef], special:{SpecialThingFilterDefName:bool}}. clear empties the filter first, so a corpse pit can be made to hold nothing but corpses. GET /defs?type=category and ?type=filter list the names.", r =>
             {
                 var map = Lookup.MapFrom(r);

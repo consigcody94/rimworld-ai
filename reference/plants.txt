@@ -1,0 +1,18 @@
+defName                    harvest   minGrow yield  growD  sowable skill fertMin tree
+Plant_Ambrosia             Ambrosia  0.65    4      6      false   0             
+Plant_TreeCocoa            Chocolate 0.65    20     16     false   8             
+Plant_Cotton               Cloth     0.65    10     8      false   0             
+Plant_Devilstrand          Devilstra 0.65    6      22.5   false   10    0.50    
+Plant_Tinctoria            Dye       0.65    1      2      false   0             
+Plant_Haygrass             Hay       0.65    18     7      false   0             
+Plant_Psychoid             PsychoidL 0.65    8      9.00   false   6     0.50    
+Plant_Agave                RawAgave  0.65    10     6      false   0             
+Plant_Berry                RawBerrie 0.65    10     6      false   0     0.5     
+Plant_Strawberry           RawBerrie 0.65    8      4.6    false   5             
+Plant_Corn                 RawCorn   0.65    22     11.3   false   0     0.70    
+Agarilux                   RawFungus 0.65    35     60     false   0     0.01    
+Glowstool                  RawFungus 0.65    20     40     false   0     0.01    
+Plant_Hops                 RawHops   0.65    8      5      false   3             
+Plant_Potato               RawPotato 0.65    11     5.8    false   0             
+Plant_Rice                 RawRice   0.65    6      3      false   0             
+Plant_Smokeleaf            Smokeleaf 0.65    9      7.50   false   4             

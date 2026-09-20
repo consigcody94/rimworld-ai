@@ -121,7 +121,7 @@ namespace RimWorldAIBridge
 
             private void OnGUI()
             {
-                try { TwitchChatHUD.OnGUI(); }
+                try { TwitchChatHUD.OnGUI(); TaskBoardHUD.OnGUI(); }
                 catch (Exception e) { Log.ErrorOnce("[RimWorldAIBridge] OnGUI failed: " + e, 7799); }
             }
         }
