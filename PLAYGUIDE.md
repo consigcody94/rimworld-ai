@@ -578,14 +578,43 @@ Read the threat before deciding. There are three cases:
 1. **Armed colonists versus anything.** Draft, take cover, focus fire the nearest hostile. Set game
    speed to 1 and run your loop every 250 ms; combat is decided in seconds.
 2. **Unarmed colony versus a small mad animal.** Fight it. A squirrel or hare loses to fists.
-3. **Unarmed colony versus armed raiders or a large predator.** Do not fight. Draft and move away,
-   keeping distance, set `hostility: "Flee"`, and let them loot and leave. A raid that takes your
-   silver is a bad day. A dead founder is the end of the run.
+3. **Unarmed colony versus armed raiders or a large predator.** Get behind a closed door, if the
+   colonist can reach the house before the enemy reaches the colonist: animals cannot open doors
+   and raiders have to break them. If not, fight. **Do not run across open ground.** Every animal a
+   founder has met is at least as fast as a person, Odyssey's birds fly, and one hit with stopping
+   power slows a runner to a sixth of their speed. The journaled founders who were ordered to
+   "evade" were all caught and downed from behind; one was walking toward a map corner the game
+   had just called unreachable.
+
+Weigh the odds with the game's own combat power, not a guess: a colonist pawn kind is 30, a
+drifter 35, a vulture 40, a timber wolf 75, a grizzly 200. `rimworld-ai`'s agent reads these from
+`reference/game-data.json`, generated from the installed game's Defs.
+
+A drafted **ranged** attack on a target out of range is refused ("Out of range"), not walked into.
+Move the archer to about three quarters of the weapon's range first (short bow 22.9 cells), then
+attack. The bridge's `/attack` now finds a firing position itself and returns `approaching: true`.
 
 The mistake that kills solo colonies is a brave decision made with no weapon. Check `weapon` on
 every colonist before you choose to engage.
 
-After combat: undraft, restore `hostility: "Attack"`, tend wounds, and only then go back to work.
+After combat: undraft, restore `hostility: "Attack"` for anyone armed, tend wounds, and only then
+go back to work. A downed raider is a prisoner waiting to be carried in: that is the growth path.
+
+### The scripted first week
+
+Cassandra and Phoebe fire the same incidents on the same ticks in every game (their
+`StorytellerComp_ClassicIntro`; Randy has none). Read `tick` from `/status`:
+
+| Tick | When | What |
+|---|---|---|
+| 150,000 | day 3, 12h | friendly visitors: a trade chance |
+| 204,000 | day 4, ~10h | one wild animal of combat power 40 or less goes manhunter (or, with Anomaly, a small shambler swarm) |
+| 264,000 | day 5, ~10h | one random Misc incident |
+| 324,000 | day 6, ~10h | a 40-point raid; one raider is forced downed instead of killed and never flees |
+
+Be armed before day 4. Have a prisoner bed, or a prisoner sleeping spot, before day 6. Win, then
+capture the downed raider: he is the colony's second colonist. Five journaled colonies reached
+tick 204,000 unprepared; three were downed within minutes of it.
 
 ### Trading
 

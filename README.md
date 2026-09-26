@@ -24,11 +24,12 @@ with a voice, an on-screen HUD, and viewers who can talk to the AI in chat.
 
 A colony being played in real time by a machine, and the machine explaining itself:
 
-- **The game window**, captured and broadcast at 1080p30 with the game's own audio.
+- **The game window**, captured and broadcast at 720p25 with the game's own audio.
 - **An in-game chat HUD** in the top right corner of RimWorld itself, showing live Twitch messages.
 - **A following camera** that tracks whichever colonist is doing something worth watching, zooming
   in for sleep and meals, out for a fight.
-- **A voice.** The agent narrates its decisions through a local neural text-to-speech model.
+- **A narrator in chat.** The agent reports what it decided and why, in Twitch chat and on the
+  in-game plan board. (A local text-to-speech voice exists but is switched off on this channel.)
 - **Chat commands.** Viewers run `!status`, `!colonists`, `!research`, `!ask <question>` and the AI
   answers from the live colony state, not from a script.
 - **A browser overlay** at `/overlay` for colonist cards, resources, research and the AI's reasoning.
@@ -76,22 +77,36 @@ flowchart TD
 
 ## Quickstart
 
-Requires macOS with RimWorld 1.6 installed, .NET SDK, Node 18 or newer.
+Requires macOS with RimWorld 1.6 installed, .NET SDK, Node 18 or newer, ffmpeg.
 
 ```bash
-# 1. Build and install the mod into RimWorld, then launch the game.
-./scripts/install-mod.sh
-open -a RimWorld
+npm run preflight          # is everything ready? starts nothing, prints no secrets
+npm run up -- --new        # studio + supervisor; the supervisor starts a fresh colony, the agent and the broadcast
+npm run status             # processes, colonists, and whether the channel is live
+npm run report             # the latest run summary, recent stalls and the last log lines, redacted
+npm run down               # end the broadcast cleanly and stop the stack (add -- --quit-game to close RimWorld)
+```
 
-# 2. Confirm the bridge is alive (works on the main menu).
-curl -s http://127.0.0.1:18800/status | jq
+An AI operator (Claude, Gemini, Codex) starts from `AGENTS.md`, the one-page runbook; `GEMINI.md`
+is the same file under the name Gemini looks for.
 
-# 3. Start a colony. Either load a save in the game, or start one through the bridge:
+`up` installs the bridge mod first when the installed build is stale and the game is closed. Without
+`--new` it resumes the newest save. Build steps, if you need them one at a time:
+
+```bash
+npm run install:mod        # build the C# mod and install it into RimWorld
+npm run build:stream       # the ScreenCaptureKit capture and the RTMPS relay
+npm run build:mcp          # the MCP server
+npm run build:data         # reference/game-data.json from the installed game's own Defs
+```
+
+To play by hand through the bridge instead:
+
+```bash
+curl -s http://127.0.0.1:18800/status | jq      # works on the main menu
 curl -s -X POST http://127.0.0.1:18800/game/new -H 'Content-Type: application/json' \
   -d '{"scenario":"NakedBrutality","storyteller":"Cassandra","difficulty":"Rough","neolithic":true,"curatePawn":true,"colonyName":"Persona Core"}'
-
-# 4. Let the autonomous agent play it.
-node scripts/colony-agent.mjs --speed=3
+node scripts/colony-agent.mjs --auto-speed
 ```
 
 To let any MCP client play instead, build and register the MCP server:
@@ -116,10 +131,11 @@ npm test     # node --test over scripts/ and stream-app/
 ```
 
 The suite needs no game and no bridge: `fetch` is stubbed and the assertions are about the orders
-the agent decides to send. It covers the two failure modes that have actually cost a run, both of
-which are regressions worth keeping closed: a pawn starving to death because hunger could not break
-the recreation timetable, and the stream engine pushing dead air to Twitch after the game window
-disappeared.
+the agent decides to send. Every test names the journaled run that failed without the behaviour it
+checks: the founder who starved inside a recreation timetable, the broadcast that pushed a frozen
+frame for an hour, the phase gate that kept every colony out of research and recruiting, the bow
+ordered to fire out of range, the founder sent running from a vulture, the prisoner capture that
+never ran, and the scripted day-4 and day-6 threats that ended most runs.
 
 ---
 
@@ -136,17 +152,22 @@ the broadcast overlay. Visit `/auth/twitch` to connect a bot account for two-way
 studio set the stream title and category.
 
 The capture path deserves a note: it uses ScreenCaptureKit to capture **only the RimWorld window**,
-scaled and letterboxed to a fixed 1920x1080 canvas, plus system audio with the microphone explicitly
-excluded. If RimWorld restarts mid-broadcast the capture emits black frames and reattaches to the new
-window, so the RTMP session survives. Encoding is hardware accelerated through `h264_videotoolbox`.
+scaled and letterboxed to a fixed 1280x720 canvas at 25 fps, plus system audio with the microphone
+explicitly excluded. If RimWorld restarts mid-broadcast the capture emits black frames and reattaches
+to the new window; if the window stays gone for two minutes the broadcast is cut rather than showing
+a frozen frame. Encoding is hardware accelerated through `h264_videotoolbox`, and the result goes to
+Twitch over RTMPS through a small native relay (`stream-app/native/relay.c`) that reads the stream
+URL from a file descriptor, so **the stream key never appears in any process's arguments**.
 
-The voice is [Vocello](https://github.com/PowerBeef/Vocello), a local Qwen3-TTS model running on
-Apple silicon. Clips are synthesized in batches and cached by text, with the Apple neural Siri voice
-as a fallback. Nothing is sent to a cloud TTS service.
+A voice exists, [Vocello](https://github.com/PowerBeef/Vocello), a local Qwen3-TTS model on Apple
+silicon with the Apple neural Siri voice as a fallback, but this channel runs text chat only and the
+studio keeps it off.
 
 Chat replies come from a language model that is handed the live colony snapshot as grounding, so the
-AI answers questions about the colony with facts from the colony. When no model is reachable it falls
-back to rule-based replies built from the same snapshot. It does not invent numbers.
+AI answers questions about the colony with facts from the colony. `CHAT_LLM=agy` uses Gemini through
+the Antigravity CLI; `CHAT_LLM=openai` uses any OpenAI-compatible endpoint (NVIDIA NIM by default,
+see `.env.example`). When no model is reachable it falls back to rule-based replies built from the
+same snapshot. It does not invent numbers.
 
 ---
 
@@ -196,8 +217,15 @@ mod/                    RimWorld 1.6 mod (C#): HTTP server, routes, chat HUD, fo
 mcp/                    MCP server (TypeScript), 65 rimworld_* tools
 scripts/
   colony-agent.mjs        autonomous player
+  tactics.mjs             pure decisions: combat odds, fight or shelter, bow range, the scripted first week
+  supervisor.mjs          keeps the game, the agent and the broadcast alive; resumes after a crash
+  stack.mjs               npm run preflight | status | up | down
+  extract-game-data.py    reference/game-data.json from the installed game's Defs
   install-mod.sh          build and install the mod
+  build-stream.sh         build the capture binary and the RTMPS relay
   register-clients.sh     register the MCP server with local AI clients
+reference/
+  game-data.json          combat power, speed and weapon range for every animal, person and weapon
 stream-app/
   server.mjs              studio dashboard and API
   streamer.mjs            ffmpeg pipeline
