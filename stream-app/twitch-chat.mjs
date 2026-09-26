@@ -6,6 +6,13 @@
 
 import { EmoteResolver, parseBadges } from "./emotes.mjs";
 
+// Common paid-viewer pitches are neither conversation nor useful on-screen chat. Match the
+// solicitation plus an obfuscated domain, leaving ordinary game links and chat alone.
+function isViewerSpam(message) {
+  return /\b(?:streamboo|viewbot)\s*\.\s*(?:com|net)\b/i.test(message) ||
+    /\b(?:buy|cheap|free|boost)\s+(?:ai\s+)?(?:viewers|followers)\b/i.test(message);
+}
+
 export class TwitchChatEngine {
   constructor(options = {}) {
     this.channel = (options.channel ?? "").replace(/^#/, "").toLowerCase();
@@ -43,12 +50,14 @@ export class TwitchChatEngine {
     const url = `${this.bridgeUrl}${path}`;
     const opts = {
       method,
-      headers: { "Content-Type": "application/json", "X-Agent-Id": process.env.RIMWORLD_AGENT_ID || "colony-agent" },
+      headers: { "Content-Type": "application/json", "X-Agent-Id": process.env.RIMWORLD_AGENT_ID || "persona-core" },
       signal: AbortSignal.timeout(10000),
     };
     if (body) opts.body = JSON.stringify(body);
     const res = await fetch(url, opts);
-    return res.json();
+    const result = await res.json();
+    if (!res.ok || result.ok === false) throw new Error(result.error || `Bridge HTTP ${res.status}`);
+    return result;
   }
 
   connect() {
@@ -226,6 +235,10 @@ export class TwitchChatEngine {
     const username = tags["display-name"]?.trim() || match[2];
     const message = match[3].trim();
     if (!message) return;
+    if (isViewerSpam(message)) {
+      console.log(`[TwitchChat] Ignored viewer-spam message from ${username}.`);
+      return;
+    }
 
     const chatMsg = {
       username,
@@ -259,6 +272,12 @@ export class TwitchChatEngine {
     try {
       await this.callBridge("POST", "/notify", { text: `[Twitch] ${username}: ${message.slice(0, 75)}`, type: "neutral" });
     } catch {}
+
+    // Show these messages on stream, but do not greet ourselves or other chat bots.
+    // Replying to the broadcaster's own line made the bot start a conversation with itself.
+    if (username.toLowerCase() === this.botUsername.toLowerCase() ||
+        /(?:^|,)bot\//i.test(tags.badges ?? "") ||
+        /^(streamelements|nightbot)$/i.test(username)) return;
 
     if (message.startsWith("!")) {
       await this.handleCommand(username, message);
@@ -318,7 +337,7 @@ export class TwitchChatEngine {
 
         case "status": {
           const snap = await this.callBridge("GET", "/snapshot");
-          const reply = `[RimWorld AI] ${snap.colonyName ?? "Colony"} | Date: ${snap.date} (${snap.weather}, ${Math.round(snap.temperatureC)}C) | Speed: ${snap.speed}x | Colonists: ${snap.colonists?.length ?? 0} | DevMode: OFF`;
+          const reply = `[RimWorld AI] ${snap.colonyName ?? "Colony"} | Date: ${snap.date} (${snap.weather}, ${Math.round(snap.temperatureC)}C) | Speed: ${snap.speed}x | Colonists: ${snap.colonists?.length ?? 0} | DevMode: ${snap.devMode ? "ON" : "OFF"}`;
           this.sendChat(reply);
           break;
         }

@@ -45,7 +45,8 @@ function saveEnv(updates) {
     const regex = new RegExp(`^${k}=.*$`, "m");
     content = regex.test(content) ? content.replace(regex, () => line) : `${content.trim()}\n${line}`;
   }
-  fs.writeFileSync(ENV_FILE, content.trim() + "\n", "utf-8");
+  fs.writeFileSync(ENV_FILE, content.trim() + "\n", { encoding: "utf-8", mode: 0o600 });
+  fs.chmodSync(ENV_FILE, 0o600);
 }
 
 let lastChannelInfo = null;
@@ -73,11 +74,10 @@ import { VoiceEngine } from "./voice.mjs";
 import { ChatBrain } from "./chat-brain.mjs";
 import { updateTwitchChannelInfo, resolveTwitchLogin, DEFAULT_STREAM_TITLE } from "./twitch-api.mjs";
 
-// Voice is off by default: the AI talks in Twitch chat. Set VOICE_ENGINE to vocello, neural or
-// say in .env to also speak the same lines aloud on stream.
+// This channel uses text chat only. Ignore legacy voice settings in recovered .env files.
 const voiceEngine = new VoiceEngine({
-  engine: env.VOICE_ENGINE || process.env.VOICE_ENGINE || "off",
-  enabled: (env.VOICE_ENGINE || process.env.VOICE_ENGINE || "off").toLowerCase() !== "off",
+  engine: "off",
+  enabled: false,
   voiceName: env.VOICE_NAME || process.env.VOICE_NAME || "com.apple.siri.natural.Nora",
   rate: 0.38,
 });
@@ -97,7 +97,7 @@ const chatEngine = new TwitchChatEngine({
 
 const streamEngine = new StreamEngine({
   streamKey: env.TWITCH_STREAM_KEY || process.env.TWITCH_STREAM_KEY || "",
-  fps: 30,
+  fps: 25,
   bitrate: "4500k",
 });
 
@@ -412,7 +412,8 @@ const server = http.createServer(async (req, res) => {
             envContent += `\n${update}`;
           }
         }
-        fs.writeFileSync(ENV_FILE, envContent.trim() + "\n", "utf-8");
+        fs.writeFileSync(ENV_FILE, envContent.trim() + "\n", { encoding: "utf-8", mode: 0o600 });
+        fs.chmodSync(ENV_FILE, 0o600);
       }
 
       return sendJson(res, 200, { ok: true });

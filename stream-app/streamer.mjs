@@ -3,11 +3,11 @@
  *
  * Pipeline
  *   capture-window (ScreenCaptureKit)
- *     fd 1 -> raw BGRA 1920x1080 @ 30 fps  -> ffmpeg pipe:0
+ *     fd 1 -> raw BGRA 1280x720 @ 25 fps  -> ffmpeg pipe:0
  *     fd 3 -> float32 PCM 48 kHz stereo    -> ffmpeg pipe:3   (system/desktop audio)
  *     fd 2 -> status lines                 -> forwarded to our stderr + parsed
  *
- * ScreenCaptureKit already scales and letterboxes onto a fixed 1920x1080 canvas,
+ * ScreenCaptureKit already scales and letterboxes onto a fixed 1280x720 canvas,
  * so ffmpeg does no scale/pad work: it just encodes with h264_videotoolbox.
  *
  * There is deliberately no avfoundation input: the microphone is never opened.
@@ -19,8 +19,23 @@ import path from "node:path";
 
 const CAPTURE_BIN = fileURLToPath(new URL("./bin/capture-window", import.meta.url));
 
-const CANVAS_WIDTH = 1920;
-const CANVAS_HEIGHT = 1080;
+/**
+ * The environment handed to capture, ffmpeg and the relay: the studio's own, minus the Twitch
+ * secrets. None of the three needs them (the relay reads its URL from fd 3), and a process's
+ * environment is readable by anything running as the same user (`ps eww`), which is the same
+ * leak the relay closed for argv.
+ */
+function childEnv() {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (/^TWITCH_(STREAM_KEY|BOT_OAUTH|CLIENT_SECRET)$|(TOKEN|SECRET|OAUTH)/i.test(key)) delete env[key];
+  }
+  return env;
+}
+const RELAY_BIN = fileURLToPath(new URL("./bin/rtmps-relay", import.meta.url));
+
+const CANVAS_WIDTH = 1280;
+const CANVAS_HEIGHT = 720;
 const AUDIO_RATE = 48000;
 const AUDIO_CHANNELS = 2;
 const AUDIO_BITRATE = "160k";
@@ -64,7 +79,7 @@ const MAX_RESTARTS = 5;
 export class StreamEngine {
   constructor(options = {}) {
     this.streamKey = options.streamKey ?? "";
-    this.ingestServer = options.ingestServer ?? "rtmp://live.twitch.tv/app";
+    this.ingestServer = options.ingestServer ?? "rtmps://live.twitch.tv/app";
     // fps and bitrate are overridable by the caller, then by env, then default.
     // 30 is the default; 60 is supported (the gop follows fps automatically).
     this.fps = options.fps ?? (parseInt(process.env.STREAM_FPS ?? "", 10) || 30);
@@ -88,6 +103,7 @@ export class StreamEngine {
 
     this.captureChild = null;
     this.child = null;
+    this.relayChild = null;
 
     // Restart bookkeeping
     this.requested = false;      // true between start() and stop()
@@ -138,7 +154,7 @@ export class StreamEngine {
    * @param {{testFile?: string}} [opts] write to a local .flv/.mp4 instead of RTMP
    */
   start(customKey = null, opts = {}) {
-    if (this.child || this.captureChild) {
+    if (this.child || this.captureChild || this.relayChild) {
       throw new Error("Stream is already active.");
     }
 
@@ -274,6 +290,7 @@ export class StreamEngine {
     //    chunk is forwarded verbatim to our own stderr, so it still behaves as if
     //    it were inherited.
     this.captureChild = spawn(CAPTURE_BIN, [], {
+      env: childEnv(),
       stdio: ["ignore", "pipe", "pipe", "pipe"],
     });
     const audioPipe = this.captureChild.stdio[3];
@@ -285,7 +302,7 @@ export class StreamEngine {
       outputFormat = target.toLowerCase().endsWith(".mp4") ? "mp4" : "flv";
       console.log(`[StreamEngine] TEST MODE: writing ${outputFormat} to ${target}`);
     } else {
-      target = `${this.ingestServer}/${key}`;
+      target = "pipe:1";
       outputFormat = "flv";
     }
 
@@ -293,14 +310,41 @@ export class StreamEngine {
     const args = this.buildFfmpegArgs({ width, height, outputFormat, target });
 
     // 3. Hand the capture process's own pipe ends to ffmpeg as its stdin and fd 3. At
-    //    1920x1080x4 bytes x 30 fps that is roughly 248 MB/s, which must never be copied through
+    //    1280x720x4 bytes x 25 fps that is roughly 92 MB/s, which must never be copied through
     //    the JS event loop: doing so starved the HTTP server that serves the overlay and made
     //    the encoder stutter. Passing the streams here makes the kernel move the bytes instead.
     if (!audioPipe) console.warn("[StreamEngine] Warning: audio pipe unavailable; stream will have no audio.");
     console.log(`[StreamEngine] Spawning FFmpeg (h264_videotoolbox + aac, no microphone input)...`);
     this.child = spawn("ffmpeg", args, {
+      env: childEnv(),
       stdio: ["pipe", "pipe", "pipe", audioPipe ?? "ignore"],
     });
+    if (!testFile) {
+      this.relayChild = spawn(RELAY_BIN, [], { env: childEnv(), stdio: ["pipe", "ignore", "pipe", "pipe"] });
+      this.child.stdout.pipe(this.relayChild.stdin);
+      this.child.stdout.on("error", () => {});
+      this.relayChild.stdin.on("error", () => {});
+      this.relayChild.stdio[3].end(`${this.ingestServer}/${key}\n`);
+      this.relayChild.stderr.on("data", (chunk) => {
+        const message = chunk.toString().trim();
+        if (message) {
+          this.stats.error = `RTMPS relay: ${message}`;
+          console.error(`[StreamEngine] ${this.stats.error}`);
+          this.emitStats();
+        }
+      });
+      this.relayChild.on("error", (error) => {
+        this.stats.error = `RTMPS relay failed: ${error.message}`;
+        this.emitStats();
+        this.child?.kill("SIGINT");
+      });
+      this.relayChild.on("close", (code) => {
+        if (this.stopping || !this.requested) return;
+        this.stats.error = `RTMPS relay exited with code ${code}`;
+        this.emitStats();
+        this.child?.kill("SIGINT");
+      });
+    }
     this.captureChild.stdout.pipe(this.child.stdin);
     this.captureChild.stdout.on("error", () => {});
     this.child.stdin.on("error", () => {});
@@ -354,7 +398,7 @@ export class StreamEngine {
       console.log(`[StreamEngine] FFmpeg process exited with code ${code}`);
       const wasRequested = this.requested && !this.stopping;
       this.teardown();
-      if (wasRequested && code !== 0 && code !== null) {
+      if (wasRequested) {
         this.scheduleRestart(`ffmpeg exited with code ${code}`);
       } else if (!wasRequested) {
         this.requested = false;
@@ -445,7 +489,7 @@ export class StreamEngine {
     if (this.restartTimer) clearTimeout(this.restartTimer);
     this.restartTimer = setTimeout(() => {
       this.restartTimer = null;
-      if (!this.requested || this.child || this.captureChild) return;
+      if (!this.requested || this.child || this.captureChild || this.relayChild) return;
       const { key, testFile } = this.lastStartArgs ?? {};
       try {
         this.launch(testFile ? null : (key || this.streamKey), testFile ?? null);
@@ -465,6 +509,10 @@ export class StreamEngine {
     if (this.child) {
       try { this.child.kill("SIGINT"); } catch {}
       this.child = null;
+    }
+    if (this.relayChild) {
+      try { this.relayChild.kill("SIGINT"); } catch {}
+      this.relayChild = null;
     }
     this.stats.running = false;
     this.stats.startedAt = null;
@@ -504,7 +552,7 @@ export class StreamEngine {
       clearTimeout(this.restartTimer);
       this.restartTimer = null;
     }
-    if (!this.child && !this.captureChild) {
+    if (!this.child && !this.captureChild && !this.relayChild) {
       this.stats.running = false;
       this.stats.captureState = "idle";
       return { ok: true, status: "idle" };
@@ -516,12 +564,16 @@ export class StreamEngine {
     // Closing the capture process first lets ffmpeg flush and finalize the file.
     const capture = this.captureChild;
     const ff = this.child;
+    const relay = this.relayChild;
     if (capture) {
       try { capture.kill("SIGINT"); } catch {}
     }
     if (ff) {
       try { ff.stdin.end(); } catch {}
       try { ff.kill("SIGINT"); } catch {}
+    }
+    if (relay) {
+      try { relay.kill("SIGINT"); } catch {}
     }
 
     setTimeout(() => {
@@ -532,6 +584,10 @@ export class StreamEngine {
       if (ff === this.child && this.child) {
         try { this.child.kill("SIGKILL"); } catch {}
         this.child = null;
+      }
+      if (relay === this.relayChild && this.relayChild) {
+        try { this.relayChild.kill("SIGKILL"); } catch {}
+        this.relayChild = null;
       }
       this.stats.running = false;
       this.stats.startedAt = null;

@@ -3,14 +3,14 @@
 //
 // ScreenCaptureKit capture engine for the RimWorld AI Twitch stream.
 //
-//   fd 1 (stdout) : raw BGRA video, fixed 1920x1080 canvas, 30 fps, never silent
+//   fd 1 (stdout) : raw BGRA video, fixed 1280x720 canvas, 25 fps, never silent
 //   fd 2 (stderr) : status lines (READY / WINDOW LOST / WINDOW REACQUIRED / ...)
 //   fd 3          : interleaved float32 PCM system audio, 48 kHz stereo
 //
 // Design notes
 //   * ScreenCaptureKit performs the scaling and the letterboxing (destinationRect
 //     + black backgroundColor), so ffmpeg needs no scale/pad filter and the pipe
-//     carries 1920x1080x30 instead of 2560x1440x60.
+//     carries 1280x720x25 instead of 2560x1440x60.
 //   * Video leaves through a 30 Hz pump thread that always writes the most recent
 //     frame (or black). SCK stops delivering frames when the screen is static and
 //     delivers nothing at all when the window is gone; the pump keeps the RTMP
@@ -30,9 +30,9 @@ import ScreenCaptureKit
 
 // MARK: - Fixed output contract
 
-let CANVAS_W = 1920
-let CANVAS_H = 1080
-let FPS: Int32 = 30
+let CANVAS_W = 1280
+let CANVAS_H = 720
+let FPS: Int32 = 25
 let FRAME_BYTES = CANVAS_W * CANVAS_H * 4
 let VIDEO_FD: Int32 = 1
 let AUDIO_FD: Int32 = 3
