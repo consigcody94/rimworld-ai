@@ -1,0 +1,2286 @@
+{
+ "generatedFrom": "/Applications/RimWorld.app",
+ "version": "1.6.4871 rev573",
+ "humanMoveSpeed": 4.6,
+ "animals": {
+  "alligator": {
+   "def": "Alligator",
+   "combatPower": 120.0,
+   "moveSpeed": 2.8,
+   "bodySize": 1.5,
+   "revengeChance": 0.5,
+   "predator": true,
+   "flies": false,
+   "source": "Odyssey"
+  },
+  "alpaca": {
+   "def": "Alpaca",
+   "combatPower": 65.0,
+   "moveSpeed": 4.1,
+   "bodySize": 1.0,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "alpha thrumbo": {
+   "def": "AlphaThrumbo",
+   "combatPower": 800.0,
+   "moveSpeed": 6.0,
+   "bodySize": 5.0,
+   "revengeChance": 1.0,
+   "predator": false,
+   "flies": false,
+   "source": "Odyssey"
+  },
+  "alphabeaver": {
+   "def": "Alphabeaver",
+   "combatPower": 40.0,
+   "moveSpeed": 3.7,
+   "bodySize": 0.45,
+   "revengeChance": 0.5,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "arctic fox": {
+   "def": "Fox_Arctic",
+   "combatPower": 45.0,
+   "moveSpeed": 4.6,
+   "bodySize": 0.55,
+   "revengeChance": null,
+   "predator": true,
+   "flies": false,
+   "source": "Core"
+  },
+  "arctic wolf": {
+   "def": "Wolf_Arctic",
+   "combatPower": 75.0,
+   "moveSpeed": 5.0,
+   "bodySize": 0.85,
+   "revengeChance": 1.0,
+   "predator": true,
+   "flies": false,
+   "source": "Core"
+  },
+  "armadillo": {
+   "def": "Armadillo",
+   "combatPower": 50.0,
+   "moveSpeed": 4.0,
+   "bodySize": 0.4,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Odyssey"
+  },
+  "badger": {
+   "def": "Badger",
+   "combatPower": 50.0,
+   "moveSpeed": 3.8,
+   "bodySize": 0.6,
+   "revengeChance": 1.0,
+   "predator": false,
+   "flies": false,
+   "source": "Odyssey"
+  },
+  "barkskin dryad": {
+   "def": "Dryad_Barkskin",
+   "combatPower": 40.0,
+   "moveSpeed": 3.2,
+   "bodySize": 0.65,
+   "revengeChance": 1.0,
+   "predator": false,
+   "flies": false,
+   "source": "Ideology"
+  },
+  "berrymaker dryad": {
+   "def": "Dryad_Berrymaker",
+   "combatPower": 40.0,
+   "moveSpeed": 3.0,
+   "bodySize": 0.667,
+   "revengeChance": 1.0,
+   "predator": false,
+   "flies": false,
+   "source": "Ideology"
+  },
+  "bison": {
+   "def": "Bison",
+   "combatPower": 100.0,
+   "moveSpeed": 4.7,
+   "bodySize": 2.4,
+   "revengeChance": 0.1,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "bluebird": {
+   "def": "Bluebird",
+   "combatPower": 25.0,
+   "moveSpeed": 3.1,
+   "bodySize": 0.15,
+   "revengeChance": 0.0,
+   "predator": false,
+   "flies": true,
+   "source": "Odyssey"
+  },
+  "bog hound": {
+   "def": "BogHound",
+   "combatPower": 70.0,
+   "moveSpeed": 5.0,
+   "bodySize": 0.85,
+   "revengeChance": 0.5,
+   "predator": true,
+   "flies": false,
+   "source": "Odyssey"
+  },
+  "boomalope": {
+   "def": "Boomalope",
+   "combatPower": 80.0,
+   "moveSpeed": 3.4,
+   "bodySize": 2.0,
+   "revengeChance": 0.1,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "boomrat": {
+   "def": "Boomrat",
+   "combatPower": 55.0,
+   "moveSpeed": 4.6,
+   "bodySize": 0.2,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "bullfrog": {
+   "def": "Bullfrog",
+   "combatPower": 30.0,
+   "moveSpeed": 2.8,
+   "bodySize": 0.2,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Odyssey"
+  },
+  "capybara": {
+   "def": "Capybara",
+   "combatPower": 45.0,
+   "moveSpeed": 3.9,
+   "bodySize": 0.75,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "caribou": {
+   "def": "Caribou",
+   "combatPower": 110.0,
+   "moveSpeed": 5.0,
+   "bodySize": 1.0,
+   "revengeChance": 0.1,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "carrier dryad": {
+   "def": "Dryad_Carrier",
+   "combatPower": 40.0,
+   "moveSpeed": 2.4,
+   "bodySize": 0.667,
+   "revengeChance": 1.0,
+   "predator": false,
+   "flies": false,
+   "source": "Ideology"
+  },
+  "cassowary": {
+   "def": "Cassowary",
+   "combatPower": 60.0,
+   "moveSpeed": 4.6,
+   "bodySize": 0.6,
+   "revengeChance": 1.0,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "cat": {
+   "def": "Cat",
+   "combatPower": 35.0,
+   "moveSpeed": 4.4,
+   "bodySize": 0.32,
+   "revengeChance": null,
+   "predator": true,
+   "flies": false,
+   "source": "Core"
+  },
+  "chicken": {
+   "def": "Chicken",
+   "combatPower": 30.0,
+   "moveSpeed": 2.1,
+   "bodySize": 0.3,
+   "revengeChance": null,
+   "predator": false,
+   "flies": true,
+   "source": "Core"
+  },
+  "chinchilla": {
+   "def": "Chinchilla",
+   "combatPower": 33.0,
+   "moveSpeed": 5.0,
+   "bodySize": 0.35,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "clawer dryad": {
+   "def": "Dryad_Clawer",
+   "combatPower": 40.0,
+   "moveSpeed": 4.0,
+   "bodySize": 0.667,
+   "revengeChance": 1.0,
+   "predator": false,
+   "flies": false,
+   "source": "Ideology"
+  },
+  "cobra": {
+   "def": "Cobra",
+   "combatPower": 65.0,
+   "moveSpeed": 3.5,
+   "bodySize": 0.25,
+   "revengeChance": 0.5,
+   "predator": true,
+   "flies": false,
+   "source": "Core"
+  },
+  "colossus toad": {
+   "def": "ColossusToad",
+   "combatPower": 60.0,
+   "moveSpeed": 3.2,
+   "bodySize": 0.8,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Odyssey"
+  },
+  "cougar": {
+   "def": "Cougar",
+   "combatPower": 120.0,
+   "moveSpeed": 5.0,
+   "bodySize": 1.0,
+   "revengeChance": 0.5,
+   "predator": true,
+   "flies": false,
+   "source": "Core"
+  },
+  "cow": {
+   "def": "Cow",
+   "combatPower": 75.0,
+   "moveSpeed": 3.2,
+   "bodySize": 2.4,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "crow": {
+   "def": "Crow",
+   "combatPower": 25.0,
+   "moveSpeed": 3.1,
+   "bodySize": 0.15,
+   "revengeChance": 0.1,
+   "predator": false,
+   "flies": true,
+   "source": "Odyssey"
+  },
+  "deer": {
+   "def": "Deer",
+   "combatPower": 50.0,
+   "moveSpeed": 5.5,
+   "bodySize": 1.2,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "donkey": {
+   "def": "Donkey",
+   "combatPower": 80.0,
+   "moveSpeed": 5.0,
+   "bodySize": 1.4,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "dromedary": {
+   "def": "Dromedary",
+   "combatPower": 90.0,
+   "moveSpeed": 4.3,
+   "bodySize": 2.1,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "duck": {
+   "def": "Duck",
+   "combatPower": 30.0,
+   "moveSpeed": 2.1,
+   "bodySize": 0.3,
+   "revengeChance": null,
+   "predator": false,
+   "flies": true,
+   "source": "Core"
+  },
+  "elephant": {
+   "def": "Elephant",
+   "combatPower": 260.0,
+   "moveSpeed": 4.8,
+   "bodySize": 4.0,
+   "revengeChance": 0.5,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "elk": {
+   "def": "Elk",
+   "combatPower": 110.0,
+   "moveSpeed": 5.0,
+   "bodySize": 2.1,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "emu": {
+   "def": "Emu",
+   "combatPower": 70.0,
+   "moveSpeed": 5.5,
+   "bodySize": 0.6,
+   "revengeChance": 1.0,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "fennec fox": {
+   "def": "Fox_Fennec",
+   "combatPower": 45.0,
+   "moveSpeed": 4.6,
+   "bodySize": 0.55,
+   "revengeChance": null,
+   "predator": true,
+   "flies": false,
+   "source": "Core"
+  },
+  "flamingo": {
+   "def": "Flamingo",
+   "combatPower": 40.0,
+   "moveSpeed": 3.4,
+   "bodySize": 0.6,
+   "revengeChance": null,
+   "predator": false,
+   "flies": true,
+   "source": "Odyssey"
+  },
+  "gaumaker dryad": {
+   "def": "Dryad_Gaumaker",
+   "combatPower": 40.0,
+   "moveSpeed": 3.0,
+   "bodySize": 0.667,
+   "revengeChance": 1.0,
+   "predator": false,
+   "flies": false,
+   "source": "Ideology"
+  },
+  "gazelle": {
+   "def": "Gazelle",
+   "combatPower": 40.0,
+   "moveSpeed": 6.0,
+   "bodySize": 0.7,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "goat": {
+   "def": "Goat",
+   "combatPower": 45.0,
+   "moveSpeed": 3.9,
+   "bodySize": 0.75,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "goose": {
+   "def": "Goose",
+   "combatPower": 35.0,
+   "moveSpeed": 2.3,
+   "bodySize": 0.6,
+   "revengeChance": 0.1,
+   "predator": false,
+   "flies": true,
+   "source": "Core"
+  },
+  "gorilla": {
+   "def": "Gorilla",
+   "combatPower": 160.0,
+   "moveSpeed": 4.7,
+   "bodySize": 2.0,
+   "revengeChance": 0.5,
+   "predator": false,
+   "flies": false,
+   "source": "Odyssey"
+  },
+  "greatwolf": {
+   "def": "Wolf_Great",
+   "combatPower": 95.0,
+   "moveSpeed": 5.5,
+   "bodySize": 1.5,
+   "revengeChance": 1.0,
+   "predator": true,
+   "flies": false,
+   "source": "Odyssey"
+  },
+  "grizzly bear": {
+   "def": "Bear_Grizzly",
+   "combatPower": 200.0,
+   "moveSpeed": 4.6,
+   "bodySize": 2.15,
+   "revengeChance": 0.5,
+   "predator": true,
+   "flies": false,
+   "source": "Core"
+  },
+  "guinea pig": {
+   "def": "GuineaPig",
+   "combatPower": 33.0,
+   "moveSpeed": 5.0,
+   "bodySize": 0.2,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "hare": {
+   "def": "Hare",
+   "combatPower": 33.0,
+   "moveSpeed": 6.0,
+   "bodySize": 0.2,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "hermit crab": {
+   "def": "HermitCrab",
+   "combatPower": 50.0,
+   "moveSpeed": 2.0,
+   "bodySize": 0.2,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Odyssey"
+  },
+  "heron": {
+   "def": "Heron",
+   "combatPower": 40.0,
+   "moveSpeed": 3.4,
+   "bodySize": 0.6,
+   "revengeChance": null,
+   "predator": false,
+   "flies": true,
+   "source": "Odyssey"
+  },
+  "hippo": {
+   "def": "Hippo",
+   "combatPower": 250.0,
+   "moveSpeed": 4.2,
+   "bodySize": 2.8,
+   "revengeChance": 1.0,
+   "predator": false,
+   "flies": false,
+   "source": "Odyssey"
+  },
+  "hive queen": {
+   "def": "HiveQueen",
+   "combatPower": 500.0,
+   "moveSpeed": 3.4,
+   "bodySize": 4.5,
+   "revengeChance": 1.0,
+   "predator": false,
+   "flies": false,
+   "source": "Odyssey"
+  },
+  "horse": {
+   "def": "Horse",
+   "combatPower": 100.0,
+   "moveSpeed": 5.8,
+   "bodySize": 2.4,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "husky": {
+   "def": "Husky",
+   "combatPower": 75.0,
+   "moveSpeed": 5.0,
+   "bodySize": 0.86,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "ibex": {
+   "def": "Ibex",
+   "combatPower": 50.0,
+   "moveSpeed": 4.6,
+   "bodySize": 1.0,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "iguana": {
+   "def": "Iguana",
+   "combatPower": 40.0,
+   "moveSpeed": 3.0,
+   "bodySize": 0.4,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "immature dryad": {
+   "def": "Dryad_Basic",
+   "combatPower": 40.0,
+   "moveSpeed": 3.0,
+   "bodySize": 0.667,
+   "revengeChance": 1.0,
+   "predator": false,
+   "flies": false,
+   "source": "Ideology"
+  },
+  "labrador retriever": {
+   "def": "LabradorRetriever",
+   "combatPower": 70.0,
+   "moveSpeed": 5.0,
+   "bodySize": 0.75,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "larva": {
+   "def": "Larva",
+   "combatPower": 25.0,
+   "moveSpeed": 2.0,
+   "bodySize": 0.2,
+   "revengeChance": 0.5,
+   "predator": false,
+   "flies": false,
+   "source": "Odyssey"
+  },
+  "lava snail": {
+   "def": "LavaSnail",
+   "combatPower": 55.0,
+   "moveSpeed": 0.85,
+   "bodySize": 0.9,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Odyssey"
+  },
+  "locust": {
+   "def": "Locust",
+   "combatPower": 55.0,
+   "moveSpeed": 3.0,
+   "bodySize": 0.6,
+   "revengeChance": 0.5,
+   "predator": false,
+   "flies": true,
+   "source": "Odyssey"
+  },
+  "lynx": {
+   "def": "Lynx",
+   "combatPower": 80.0,
+   "moveSpeed": 5.0,
+   "bodySize": 0.6,
+   "revengeChance": 0.5,
+   "predator": true,
+   "flies": false,
+   "source": "Core"
+  },
+  "macaw": {
+   "def": "Macaw",
+   "combatPower": 25.0,
+   "moveSpeed": 3.1,
+   "bodySize": 0.35,
+   "revengeChance": 0.0,
+   "predator": false,
+   "flies": true,
+   "source": "Odyssey"
+  },
+  "mastodon": {
+   "def": "Mastodon",
+   "combatPower": 330.0,
+   "moveSpeed": 4.7,
+   "bodySize": 4.5,
+   "revengeChance": 0.5,
+   "predator": false,
+   "flies": false,
+   "source": "Odyssey"
+  },
+  "medicinemaker dryad": {
+   "def": "Dryad_Medicinemaker",
+   "combatPower": 40.0,
+   "moveSpeed": 3.0,
+   "bodySize": 0.667,
+   "revengeChance": 1.0,
+   "predator": false,
+   "flies": false,
+   "source": "Ideology"
+  },
+  "megascarab": {
+   "def": "Megascarab",
+   "combatPower": 40.0,
+   "moveSpeed": 3.75,
+   "bodySize": 0.2,
+   "revengeChance": 0.5,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "megasloth": {
+   "def": "Megasloth",
+   "combatPower": 280.0,
+   "moveSpeed": 4.8,
+   "bodySize": 4.0,
+   "revengeChance": 0.5,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "megaspider": {
+   "def": "Megaspider",
+   "combatPower": 150.0,
+   "moveSpeed": 3.6,
+   "bodySize": 1.2,
+   "revengeChance": 0.5,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "megavole": {
+   "def": "Megavole",
+   "combatPower": 70.0,
+   "moveSpeed": 3.2,
+   "bodySize": 0.8,
+   "revengeChance": 0.1,
+   "predator": false,
+   "flies": false,
+   "source": "Odyssey"
+  },
+  "mink": {
+   "def": "Mink",
+   "combatPower": 33.0,
+   "moveSpeed": 4.6,
+   "bodySize": 0.35,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Odyssey"
+  },
+  "monitor lizard": {
+   "def": "MonitorLizard",
+   "combatPower": 60.0,
+   "moveSpeed": 3.6,
+   "bodySize": 0.6,
+   "revengeChance": null,
+   "predator": true,
+   "flies": false,
+   "source": "Odyssey"
+  },
+  "monkey": {
+   "def": "Monkey",
+   "combatPower": 35.0,
+   "moveSpeed": 4.3,
+   "bodySize": 0.35,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "moose": {
+   "def": "Moose",
+   "combatPower": 125.0,
+   "moveSpeed": 4.7,
+   "bodySize": 2.5,
+   "revengeChance": 0.2,
+   "predator": false,
+   "flies": false,
+   "source": "Odyssey"
+  },
+  "muffalo": {
+   "def": "Muffalo",
+   "combatPower": 100.0,
+   "moveSpeed": 4.5,
+   "bodySize": 2.4,
+   "revengeChance": 0.1,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "muskox": {
+   "def": "Muskox",
+   "combatPower": 110.0,
+   "moveSpeed": 4.3,
+   "bodySize": 2.5,
+   "revengeChance": 0.1,
+   "predator": false,
+   "flies": false,
+   "source": "Odyssey"
+  },
+  "ostrich": {
+   "def": "Ostrich",
+   "combatPower": 85.0,
+   "moveSpeed": 6.0,
+   "bodySize": 1.0,
+   "revengeChance": 1.0,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "otter": {
+   "def": "Otter",
+   "combatPower": 30.0,
+   "moveSpeed": 3.5,
+   "bodySize": 0.4,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Odyssey"
+  },
+  "panda": {
+   "def": "Panda",
+   "combatPower": 80.0,
+   "moveSpeed": 3.2,
+   "bodySize": 1.5,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Odyssey"
+  },
+  "panther": {
+   "def": "Panther",
+   "combatPower": 120.0,
+   "moveSpeed": 5.0,
+   "bodySize": 1.0,
+   "revengeChance": 0.5,
+   "predator": true,
+   "flies": false,
+   "source": "Core"
+  },
+  "peafowl": {
+   "def": "Peacock",
+   "combatPower": 40.0,
+   "moveSpeed": 3.0,
+   "bodySize": 0.6,
+   "revengeChance": null,
+   "predator": false,
+   "flies": true,
+   "source": "Odyssey"
+  },
+  "penguin": {
+   "def": "Penguin",
+   "combatPower": 50.0,
+   "moveSpeed": 2.0,
+   "bodySize": 0.6,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Odyssey"
+  },
+  "pig": {
+   "def": "Pig",
+   "combatPower": 45.0,
+   "moveSpeed": 3.9,
+   "bodySize": 1.7,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "polar bear": {
+   "def": "Bear_Polar",
+   "combatPower": 200.0,
+   "moveSpeed": 4.6,
+   "bodySize": 2.15,
+   "revengeChance": 0.5,
+   "predator": true,
+   "flies": false,
+   "source": "Core"
+  },
+  "porcupine": {
+   "def": "Porcupine",
+   "combatPower": 30.0,
+   "moveSpeed": 3.0,
+   "bodySize": 0.35,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Odyssey"
+  },
+  "prairie dog": {
+   "def": "PrairieDog",
+   "combatPower": 30.0,
+   "moveSpeed": 3.8,
+   "bodySize": 0.2,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Odyssey"
+  },
+  "quail": {
+   "def": "Quail",
+   "combatPower": 25.0,
+   "moveSpeed": 3.1,
+   "bodySize": 0.25,
+   "revengeChance": 0.0,
+   "predator": false,
+   "flies": true,
+   "source": "Odyssey"
+  },
+  "raccoon": {
+   "def": "Raccoon",
+   "combatPower": 35.0,
+   "moveSpeed": 4.1,
+   "bodySize": 0.4,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "rat": {
+   "def": "Rat",
+   "combatPower": 30.0,
+   "moveSpeed": 4.0,
+   "bodySize": 0.2,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "red fox": {
+   "def": "Fox_Red",
+   "combatPower": 45.0,
+   "moveSpeed": 4.6,
+   "bodySize": 0.55,
+   "revengeChance": null,
+   "predator": true,
+   "flies": false,
+   "source": "Core"
+  },
+  "rhinoceros": {
+   "def": "Rhinoceros",
+   "combatPower": 270.0,
+   "moveSpeed": 5.0,
+   "bodySize": 3.0,
+   "revengeChance": 0.5,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "scimitar cat": {
+   "def": "Cat_Scimitar",
+   "combatPower": 120.0,
+   "moveSpeed": 6.0,
+   "bodySize": 1.3,
+   "revengeChance": 1.0,
+   "predator": true,
+   "flies": false,
+   "source": "Odyssey"
+  },
+  "sea lion": {
+   "def": "SeaLion",
+   "combatPower": 70.0,
+   "moveSpeed": 2.8,
+   "bodySize": 1.2,
+   "revengeChance": 0.1,
+   "predator": false,
+   "flies": false,
+   "source": "Odyssey"
+  },
+  "sea turtle": {
+   "def": "SeaTurtle",
+   "combatPower": 70.0,
+   "moveSpeed": 1.5,
+   "bodySize": 0.5,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Odyssey"
+  },
+  "seal": {
+   "def": "Seal",
+   "combatPower": 50.0,
+   "moveSpeed": 2.6,
+   "bodySize": 0.8,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Odyssey"
+  },
+  "sheep": {
+   "def": "Sheep",
+   "combatPower": 55.0,
+   "moveSpeed": 4.8,
+   "bodySize": 0.75,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "snowhare": {
+   "def": "Snowhare",
+   "combatPower": 33.0,
+   "moveSpeed": 6.0,
+   "bodySize": 0.2,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "sparrow": {
+   "def": "Sparrow",
+   "combatPower": 20.0,
+   "moveSpeed": 3.1,
+   "bodySize": 0.12,
+   "revengeChance": 0.0,
+   "predator": false,
+   "flies": true,
+   "source": "Odyssey"
+  },
+  "spelopede": {
+   "def": "Spelopede",
+   "combatPower": 75.0,
+   "moveSpeed": 3.65,
+   "bodySize": 0.8,
+   "revengeChance": 0.5,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "squirrel": {
+   "def": "Squirrel",
+   "combatPower": 33.0,
+   "moveSpeed": 5.1,
+   "bodySize": 0.2,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "stone crab": {
+   "def": "StoneCrab",
+   "combatPower": 70.0,
+   "moveSpeed": 2.2,
+   "bodySize": 0.3,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Odyssey"
+  },
+  "swan": {
+   "def": "Swan",
+   "combatPower": 40.0,
+   "moveSpeed": 3.4,
+   "bodySize": 0.6,
+   "revengeChance": 0.5,
+   "predator": false,
+   "flies": true,
+   "source": "Odyssey"
+  },
+  "thrumbo": {
+   "def": "Thrumbo",
+   "combatPower": 500.0,
+   "moveSpeed": 5.5,
+   "bodySize": 4.0,
+   "revengeChance": 1.0,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "tiger": {
+   "def": "Tiger",
+   "combatPower": 130.0,
+   "moveSpeed": 5.2,
+   "bodySize": 1.4,
+   "revengeChance": 0.75,
+   "predator": true,
+   "flies": false,
+   "source": "Odyssey"
+  },
+  "timber wolf": {
+   "def": "Wolf_Timber",
+   "combatPower": 75.0,
+   "moveSpeed": 5.0,
+   "bodySize": 0.85,
+   "revengeChance": 1.0,
+   "predator": true,
+   "flies": false,
+   "source": "Core"
+  },
+  "tortoise": {
+   "def": "Tortoise",
+   "combatPower": 70.0,
+   "moveSpeed": 1.0,
+   "bodySize": 0.5,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "toxalope": {
+   "def": "Toxalope",
+   "combatPower": 80.0,
+   "moveSpeed": 3.4,
+   "bodySize": 1.4,
+   "revengeChance": 0.1,
+   "predator": false,
+   "flies": false,
+   "source": "Biotech"
+  },
+  "turkey": {
+   "def": "Turkey",
+   "combatPower": 50.0,
+   "moveSpeed": 3.6,
+   "bodySize": 0.6,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "vulture": {
+   "def": "Vulture",
+   "combatPower": 40.0,
+   "moveSpeed": 2.8,
+   "bodySize": 0.6,
+   "revengeChance": null,
+   "predator": false,
+   "flies": true,
+   "source": "Odyssey"
+  },
+  "walrus": {
+   "def": "Walrus",
+   "combatPower": 70.0,
+   "moveSpeed": 2.3,
+   "bodySize": 2.0,
+   "revengeChance": 0.5,
+   "predator": false,
+   "flies": false,
+   "source": "Odyssey"
+  },
+  "warg": {
+   "def": "Warg",
+   "combatPower": 160.0,
+   "moveSpeed": 5.0,
+   "bodySize": 1.4,
+   "revengeChance": 1.0,
+   "predator": true,
+   "flies": false,
+   "source": "Core"
+  },
+  "waste rat": {
+   "def": "WasteRat",
+   "combatPower": 40.0,
+   "moveSpeed": 4.0,
+   "bodySize": 0.3,
+   "revengeChance": 0.5,
+   "predator": false,
+   "flies": false,
+   "source": "Biotech"
+  },
+  "wild boar": {
+   "def": "WildBoar",
+   "combatPower": 55.0,
+   "moveSpeed": 4.6,
+   "bodySize": 0.85,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "wolverine": {
+   "def": "Wolverine",
+   "combatPower": 70.0,
+   "moveSpeed": 4.6,
+   "bodySize": 0.7,
+   "revengeChance": 1.0,
+   "predator": true,
+   "flies": false,
+   "source": "Odyssey"
+  },
+  "woodmaker dryad": {
+   "def": "Dryad_Woodmaker",
+   "combatPower": 40.0,
+   "moveSpeed": 3.0,
+   "bodySize": 0.667,
+   "revengeChance": 1.0,
+   "predator": false,
+   "flies": false,
+   "source": "Ideology"
+  },
+  "yak": {
+   "def": "Yak",
+   "combatPower": 75.0,
+   "moveSpeed": 3.2,
+   "bodySize": 2.1,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  },
+  "yorkshire terrier": {
+   "def": "YorkshireTerrier",
+   "combatPower": 30.0,
+   "moveSpeed": 3.1,
+   "bodySize": 0.32,
+   "revengeChance": null,
+   "predator": false,
+   "flies": false,
+   "source": "Core"
+  }
+ },
+ "people": {
+  "acolyte": {
+   "def": "Empire_Royal_Acolyte",
+   "combatPower": 125.0,
+   "source": "Royalty"
+  },
+  "ancient captain": {
+   "def": "AncientSoldier_Leader",
+   "combatPower": 130.0,
+   "source": "Odyssey"
+  },
+  "ancient soldier": {
+   "def": "AncientSoldier",
+   "combatPower": 85.0,
+   "source": "Core"
+  },
+  "archer": {
+   "def": "Tribal_Archer_Fire",
+   "combatPower": 75.0,
+   "source": "Biotech"
+  },
+  "archer chief": {
+   "def": "Tribal_ChiefRanged",
+   "combatPower": 85.0,
+   "source": "Core"
+  },
+  "archon": {
+   "def": "Empire_Royal_Count",
+   "combatPower": 135.0,
+   "source": "Royalty"
+  },
+  "baron": {
+   "def": "Empire_Royal_Baron",
+   "combatPower": 135.0,
+   "source": "Royalty"
+  },
+  "beggar": {
+   "def": "Beggar",
+   "combatPower": 35.0,
+   "source": "Ideology"
+  },
+  "berserker": {
+   "def": "Tribal_Berserker",
+   "combatPower": 65.0,
+   "source": "Core"
+  },
+  "berserker chief": {
+   "def": "Tribal_ChiefMelee",
+   "combatPower": 85.0,
+   "source": "Core"
+  },
+  "bestower": {
+   "def": "Empire_Royal_Bestower",
+   "combatPower": 50.0,
+   "source": "Royalty"
+  },
+  "boss": {
+   "def": "PirateBoss",
+   "combatPower": 130.0,
+   "source": "Core"
+  },
+  "breacher": {
+   "def": "Tribal_Breacher",
+   "combatPower": 55.0,
+   "source": "Core"
+  },
+  "cataphract": {
+   "def": "Empire_Fighter_Cataphract",
+   "combatPower": 150.0,
+   "source": "Royalty"
+  },
+  "champion": {
+   "def": "Empire_Fighter_Champion",
+   "combatPower": 100.0,
+   "source": "Royalty"
+  },
+  "colonist": {
+   "def": "Colonist",
+   "combatPower": 30.0,
+   "source": "Core"
+  },
+  "consul": {
+   "def": "Empire_Royal_Consul",
+   "combatPower": 135.0,
+   "source": "Royalty"
+  },
+  "crew member": {
+   "def": "CrewMember",
+   "combatPower": 30.0,
+   "source": "Odyssey"
+  },
+  "dominus": {
+   "def": "Empire_Royal_Duke",
+   "combatPower": 135.0,
+   "source": "Royalty"
+  },
+  "drifter": {
+   "def": "Drifter_Yttakin",
+   "combatPower": 35.0,
+   "source": "Biotech"
+  },
+  "elite mercenary": {
+   "def": "Mercenary_Elite_Yttakin",
+   "combatPower": 130.0,
+   "source": "Biotech"
+  },
+  "elite waster": {
+   "def": "Mercenary_EliteTox",
+   "combatPower": 130.0,
+   "source": "Biotech"
+  },
+  "emp grenadier": {
+   "def": "Grenadier_EMP",
+   "combatPower": 55.0,
+   "source": "Core"
+  },
+  "farmer": {
+   "def": "Tribal_Farmer",
+   "combatPower": 35.0,
+   "source": "Ideology"
+  },
+  "ghoul": {
+   "def": "Ghoul",
+   "combatPower": 90.0,
+   "source": "Anomaly"
+  },
+  "grenadier": {
+   "def": "Grenadier_Destructive",
+   "combatPower": 70.0,
+   "source": "Core"
+  },
+  "guild citizen": {
+   "def": "TradersGuild_Citizen",
+   "combatPower": 45.0,
+   "source": "Odyssey"
+  },
+  "guild gunner": {
+   "def": "TradersGuild_Gunner",
+   "combatPower": 85.0,
+   "source": "Odyssey"
+  },
+  "guild slasher": {
+   "def": "TradersGuild_Slasher",
+   "combatPower": 140.0,
+   "source": "Odyssey"
+  },
+  "guild specialist": {
+   "def": "TradersGuild_Elite",
+   "combatPower": 130.0,
+   "source": "Odyssey"
+  },
+  "heavy archer": {
+   "def": "Tribal_HeavyArcher",
+   "combatPower": 75.0,
+   "source": "Core"
+  },
+  "heavy gunner": {
+   "def": "TradersGuild_Heavy",
+   "combatPower": 140.0,
+   "source": "Odyssey"
+  },
+  "heavy mercenary": {
+   "def": "Mercenary_Heavy_Yttakin",
+   "combatPower": 140.0,
+   "source": "Biotech"
+  },
+  "heavy waster": {
+   "def": "Mercenary_HeavyTox",
+   "combatPower": 140.0,
+   "source": "Biotech"
+  },
+  "highthrall": {
+   "def": "Horaxian_Highthrall",
+   "combatPower": 90.0,
+   "source": "Anomaly"
+  },
+  "hunter": {
+   "def": "Tribal_Hunter_Fire",
+   "combatPower": 80.0,
+   "source": "Biotech"
+  },
+  "imperial citizen": {
+   "def": "Empire_Common_Lodger",
+   "combatPower": 30.0,
+   "source": "Royalty"
+  },
+  "imperial grenadier": {
+   "def": "Empire_Fighter_Grenadier",
+   "combatPower": 100.0,
+   "source": "Royalty"
+  },
+  "imperial laborer": {
+   "def": "Empire_Common_Laborer",
+   "combatPower": 30.0,
+   "source": "Royalty"
+  },
+  "imperial trader": {
+   "def": "Empire_Common_Trader",
+   "combatPower": 40.0,
+   "source": "Royalty"
+  },
+  "janissary": {
+   "def": "Empire_Fighter_Janissary",
+   "combatPower": 100.0,
+   "source": "Royalty"
+  },
+  "knight": {
+   "def": "Empire_Royal_Knight",
+   "combatPower": 130.0,
+   "source": "Royalty"
+  },
+  "logger": {
+   "def": "Tribal_Logger",
+   "combatPower": 40.0,
+   "source": "Ideology"
+  },
+  "magister": {
+   "def": "TradersGuild_Magister",
+   "combatPower": 130.0,
+   "source": "Odyssey"
+  },
+  "mechanitor": {
+   "def": "Mechanitor",
+   "combatPower": 85.0,
+   "source": "Biotech"
+  },
+  "member": {
+   "def": "Tribesperson",
+   "combatPower": 30.0,
+   "source": "Core"
+  },
+  "mercenary gunner": {
+   "def": "Mercenary_Gunner_Yttakin",
+   "combatPower": 85.0,
+   "source": "Biotech"
+  },
+  "mercenary slasher": {
+   "def": "Mercenary_Slasher_Yttakin",
+   "combatPower": 140.0,
+   "source": "Biotech"
+  },
+  "mercenary sniper": {
+   "def": "Mercenary_Sniper_Yttakin",
+   "combatPower": 110.0,
+   "source": "Biotech"
+  },
+  "miner": {
+   "def": "Miner",
+   "combatPower": 40.0,
+   "source": "Ideology"
+  },
+  "noble": {
+   "def": "Empire_Royal_NobleWimp",
+   "combatPower": 40.0,
+   "source": "Royalty"
+  },
+  "novice": {
+   "def": "Empire_Royal_Yeoman",
+   "combatPower": 120.0,
+   "source": "Royalty"
+  },
+  "penitent": {
+   "def": "Tribal_Penitent_Fire",
+   "combatPower": 70.0,
+   "source": "Biotech"
+  },
+  "pig elite": {
+   "def": "Mercenary_Elite_Pig",
+   "combatPower": 130.0,
+   "source": "Biotech"
+  },
+  "pig gunner": {
+   "def": "Mercenary_Gunner_Pig",
+   "combatPower": 85.0,
+   "source": "Biotech"
+  },
+  "pilgrim": {
+   "def": "PovertyPilgrim",
+   "combatPower": 35.0,
+   "source": "Ideology"
+  },
+  "pirate gunner": {
+   "def": "Pirate_Yttakin",
+   "combatPower": 65.0,
+   "source": "Biotech"
+  },
+  "praetor": {
+   "def": "Empire_Royal_Praetor",
+   "combatPower": 135.0,
+   "source": "Royalty"
+  },
+  "refugee": {
+   "def": "Refugee",
+   "combatPower": 35.0,
+   "source": "Royalty"
+  },
+  "researcher": {
+   "def": "Researcher",
+   "combatPower": 30.0,
+   "source": "Anomaly"
+  },
+  "salvager elite": {
+   "def": "Salvager_Elite",
+   "combatPower": 130.0,
+   "source": "Odyssey"
+  },
+  "salvager pirate": {
+   "def": "Salvager_Pirate",
+   "combatPower": 85.0,
+   "source": "Odyssey"
+  },
+  "sanguophage": {
+   "def": "Sanguophage",
+   "combatPower": 100.0,
+   "source": "Biotech"
+  },
+  "scavenger gunner": {
+   "def": "Scavenger_Yttakin",
+   "combatPower": 50.0,
+   "source": "Biotech"
+  },
+  "scavenger thrasher": {
+   "def": "Thrasher_Yttakin",
+   "combatPower": 50.0,
+   "source": "Biotech"
+  },
+  "scrapper": {
+   "def": "Salvager_Scrapper",
+   "combatPower": 140.0,
+   "source": "Odyssey"
+  },
+  "shambler soldier": {
+   "def": "ShamblerSoldier",
+   "combatPower": 45.0,
+   "source": "Anomaly"
+  },
+  "shambler swarmer": {
+   "def": "ShamblerSwarmer",
+   "combatPower": 40.0,
+   "source": "Anomaly"
+  },
+  "slave": {
+   "def": "Slave",
+   "combatPower": 30.0,
+   "source": "Core"
+  },
+  "smoke grenadier": {
+   "def": "Grenadier_Smoke",
+   "combatPower": 55.0,
+   "source": "Core"
+  },
+  "space refugee": {
+   "def": "SpaceRefugee",
+   "combatPower": 30.0,
+   "source": "Core"
+  },
+  "stellarch": {
+   "def": "Empire_Royal_Stellarch",
+   "combatPower": 135.0,
+   "source": "Royalty"
+  },
+  "stellic defender": {
+   "def": "Empire_Fighter_StellicGuardRanged",
+   "combatPower": 150.0,
+   "source": "Royalty"
+  },
+  "stellic warden": {
+   "def": "Empire_Fighter_StellicGuardMelee",
+   "combatPower": 150.0,
+   "source": "Royalty"
+  },
+  "stranger in black": {
+   "def": "StrangerInBlack",
+   "combatPower": 55.0,
+   "source": "Core"
+  },
+  "thrall": {
+   "def": "SanguophageThrall",
+   "combatPower": 100.0,
+   "source": "Biotech"
+  },
+  "town councilman": {
+   "def": "Town_Councilman_Pig",
+   "combatPower": 40.0,
+   "source": "Biotech"
+  },
+  "town guard": {
+   "def": "Town_Guard_Pig",
+   "combatPower": 60.0,
+   "source": "Biotech"
+  },
+  "town trader": {
+   "def": "Town_Trader_Pig",
+   "combatPower": 45.0,
+   "source": "Biotech"
+  },
+  "trader": {
+   "def": "Tribal_Trader",
+   "combatPower": 60.0,
+   "source": "Core"
+  },
+  "tradersguild_child": {
+   "def": "TradersGuild_Child",
+   "combatPower": 45.0,
+   "source": "Odyssey"
+  },
+  "trooper": {
+   "def": "Empire_Fighter_Trooper",
+   "combatPower": 65.0,
+   "source": "Royalty"
+  },
+  "underthrall grunt": {
+   "def": "Horaxian_Underthrall",
+   "combatPower": 55.0,
+   "source": "Anomaly"
+  },
+  "underthrall gunner": {
+   "def": "Horaxian_Gunner",
+   "combatPower": 80.0,
+   "source": "Anomaly"
+  },
+  "villager": {
+   "def": "Villager_Pig",
+   "combatPower": 45.0,
+   "source": "Biotech"
+  },
+  "warrior": {
+   "def": "Tribal_Warrior_Fire",
+   "combatPower": 75.0,
+   "source": "Biotech"
+  },
+  "waster boss": {
+   "def": "PirateBossTox",
+   "combatPower": 130.0,
+   "source": "Biotech"
+  },
+  "waster grenadier": {
+   "def": "Grenadier_Tox",
+   "combatPower": 55.0,
+   "source": "Biotech"
+  },
+  "waster gunner": {
+   "def": "Mercenary_GunnerTox",
+   "combatPower": 85.0,
+   "source": "Biotech"
+  },
+  "waster slasher": {
+   "def": "Mercenary_SlasherTox",
+   "combatPower": 140.0,
+   "source": "Biotech"
+  },
+  "well-equipped traveler": {
+   "def": "WellEquippedTraveler",
+   "combatPower": 70.0,
+   "source": "Ideology"
+  },
+  "wild man": {
+   "def": "WildMan",
+   "combatPower": 30.0,
+   "source": "Core"
+  }
+ },
+ "weapons": {
+  "ancient defender turret gun": {
+   "def": "Gun_AncientArmoredTurret",
+   "ranged": true,
+   "range": 36.9,
+   "warmup": 0.0,
+   "source": "Odyssey"
+  },
+  "assault rifle": {
+   "def": "Gun_AssaultRifle",
+   "ranged": true,
+   "range": 30.9,
+   "warmup": 1.0,
+   "source": "Core"
+  },
+  "auto-mortar": {
+   "def": "Artillery_AutoMortar",
+   "ranged": true,
+   "range": 500.0,
+   "warmup": 4.0,
+   "source": "Core"
+  },
+  "autocannon": {
+   "def": "Gun_AutocannonTurret",
+   "ranged": true,
+   "range": 32.9,
+   "warmup": 0.0,
+   "source": "Core"
+  },
+  "autopistol": {
+   "def": "Gun_Autopistol",
+   "ranged": true,
+   "range": 25.9,
+   "warmup": 0.3,
+   "source": "Core"
+  },
+  "axe": {
+   "def": "MeleeWeapon_Axe",
+   "ranged": false,
+   "range": null,
+   "warmup": null,
+   "source": "Royalty"
+  },
+  "beam graser": {
+   "def": "Gun_BeamGraser",
+   "ranged": true,
+   "range": 24.9,
+   "warmup": 1.0,
+   "source": "Biotech"
+  },
+  "beam repeater": {
+   "def": "Gun_BeamRepeater",
+   "ranged": true,
+   "range": 21.9,
+   "warmup": 4.0,
+   "source": "Odyssey"
+  },
+  "bolt-action rifle": {
+   "def": "Gun_BoltActionRifle",
+   "ranged": true,
+   "range": 36.9,
+   "warmup": 1.7,
+   "source": "Core"
+  },
+  "bowler hat": {
+   "def": "Apparel_BowlerHat",
+   "ranged": false,
+   "range": null,
+   "warmup": null,
+   "source": "Core"
+  },
+  "breach axe": {
+   "def": "MeleeWeapon_BreachAxe",
+   "ranged": false,
+   "range": null,
+   "warmup": null,
+   "source": "Core"
+  },
+  "centipede gunner": {
+   "def": "Mech_CentipedeGunner",
+   "ranged": false,
+   "range": null,
+   "warmup": null,
+   "source": "Core"
+  },
+  "chain shotgun": {
+   "def": "Gun_ChainShotgun",
+   "ranged": true,
+   "range": 12.9,
+   "warmup": 1.2,
+   "source": "Core"
+  },
+  "charge blaster turret": {
+   "def": "Gun_ChargeBlasterTurret",
+   "ranged": true,
+   "range": 44.9,
+   "warmup": null,
+   "source": "Biotech"
+  },
+  "charge lance": {
+   "def": "Gun_ChargeLance",
+   "ranged": true,
+   "range": 32.9,
+   "warmup": 1.7,
+   "source": "Core"
+  },
+  "charge rifle": {
+   "def": "Gun_ChargeRifle",
+   "ranged": true,
+   "range": 27.9,
+   "warmup": 1.0,
+   "source": "Core"
+  },
+  "club": {
+   "def": "MeleeWeapon_Club",
+   "ranged": false,
+   "range": null,
+   "warmup": null,
+   "source": "Core"
+  },
+  "doomsday rocket launcher": {
+   "def": "Gun_DoomsdayRocket",
+   "ranged": true,
+   "range": 35.9,
+   "warmup": 4.5,
+   "source": "Core"
+  },
+  "eltex staff": {
+   "def": "MeleeWeapon_PsyfocusStaff",
+   "ranged": false,
+   "range": null,
+   "warmup": null,
+   "source": "Royalty"
+  },
+  "emp grenades": {
+   "def": "Weapon_GrenadeEMP",
+   "ranged": true,
+   "range": 12.9,
+   "warmup": 1.5,
+   "source": "Core"
+  },
+  "emp launcher": {
+   "def": "Gun_EmpLauncher",
+   "ranged": true,
+   "range": 23.9,
+   "warmup": 3.5,
+   "source": "Core"
+  },
+  "flamebow": {
+   "def": "Flamebow",
+   "ranged": true,
+   "range": 22.9,
+   "warmup": 1.35,
+   "source": "Biotech"
+  },
+  "foam sprayer": {
+   "def": "Gun_TurretFoam",
+   "ranged": true,
+   "range": 19.9,
+   "warmup": 0.0,
+   "source": "Core"
+  },
+  "frag grenades": {
+   "def": "Weapon_GrenadeFrag",
+   "ranged": true,
+   "range": 12.9,
+   "warmup": 1.5,
+   "source": "Core"
+  },
+  "gladius": {
+   "def": "MeleeWeapon_Gladius",
+   "ranged": false,
+   "range": null,
+   "warmup": null,
+   "source": "Core"
+  },
+  "greatbow": {
+   "def": "Bow_Great",
+   "ranged": true,
+   "range": 29.9,
+   "warmup": 2.0,
+   "source": "Core"
+  },
+  "gunlink": {
+   "def": "Apparel_Gunlink",
+   "ranged": false,
+   "range": null,
+   "warmup": null,
+   "source": "Royalty"
+  },
+  "heavy charge blaster": {
+   "def": "Gun_ChargeBlasterHeavy",
+   "ranged": true,
+   "range": 26.9,
+   "warmup": 1.25,
+   "source": "Core"
+  },
+  "heavy smg": {
+   "def": "Gun_HeavySMG",
+   "ranged": true,
+   "range": 22.9,
+   "warmup": 0.9,
+   "source": "Core"
+  },
+  "hellcat rifle": {
+   "def": "Gun_HellcatRifle",
+   "ranged": true,
+   "range": 26.9,
+   "warmup": 1.1,
+   "source": "Anomaly"
+  },
+  "hellsphere cannon": {
+   "def": "Gun_HellsphereCannon",
+   "ranged": true,
+   "range": 18.9,
+   "warmup": 7.5,
+   "source": "Biotech"
+  },
+  "hellsphere cannon shot": {
+   "def": "Bullet_HellsphereCannonGun",
+   "ranged": false,
+   "range": null,
+   "warmup": null,
+   "source": "Biotech"
+  },
+  "ikwa": {
+   "def": "MeleeWeapon_Ikwa",
+   "ranged": false,
+   "range": null,
+   "warmup": null,
+   "source": "Core"
+  },
+  "incendiary launcher": {
+   "def": "Gun_IncendiaryLauncher",
+   "ranged": true,
+   "range": 23.9,
+   "warmup": 3.5,
+   "source": "Core"
+  },
+  "incinerator": {
+   "def": "Gun_Incinerator",
+   "ranged": true,
+   "range": 15.9,
+   "warmup": 0.5,
+   "source": "Anomaly"
+  },
+  "inferno cannon": {
+   "def": "Gun_InfernoCannon",
+   "ranged": true,
+   "range": 26.9,
+   "warmup": 1.25,
+   "source": "Core"
+  },
+  "knife": {
+   "def": "MeleeWeapon_Knife",
+   "ranged": false,
+   "range": null,
+   "warmup": null,
+   "source": "Core"
+  },
+  "light charge blaster": {
+   "def": "Gun_ChargeBlasterHeavyTurret",
+   "ranged": true,
+   "range": 45.9,
+   "warmup": 1.25,
+   "source": "Core"
+  },
+  "lmg": {
+   "def": "Gun_LMG",
+   "ranged": true,
+   "range": 25.9,
+   "warmup": 1.8,
+   "source": "Core"
+  },
+  "longsword": {
+   "def": "MeleeWeapon_LongSword",
+   "ranged": false,
+   "range": null,
+   "warmup": null,
+   "source": "Core"
+  },
+  "mace": {
+   "def": "MeleeWeapon_Mace",
+   "ranged": false,
+   "range": null,
+   "warmup": null,
+   "source": "Core"
+  },
+  "machine pistol": {
+   "def": "Gun_MachinePistol",
+   "ranged": true,
+   "range": 19.9,
+   "warmup": 0.5,
+   "source": "Core"
+  },
+  "mini-flameblaster": {
+   "def": "Gun_MiniFlameblaster",
+   "ranged": true,
+   "range": 4.9,
+   "warmup": 0.0,
+   "source": "Biotech"
+  },
+  "mini-shotgun": {
+   "def": "Gun_MiniShotgun",
+   "ranged": true,
+   "range": 12.9,
+   "warmup": 1.2,
+   "source": "Biotech"
+  },
+  "mini-slugger": {
+   "def": "Gun_MiniTurretMech",
+   "ranged": true,
+   "range": 45.9,
+   "warmup": null,
+   "source": "Core"
+  },
+  "mini-turret gun": {
+   "def": "Gun_MiniTurret",
+   "ranged": true,
+   "range": 28.9,
+   "warmup": 0.0,
+   "source": "Core"
+  },
+  "minigun": {
+   "def": "Gun_Minigun",
+   "ranged": true,
+   "range": 30.9,
+   "warmup": 2.5,
+   "source": "Core"
+  },
+  "molotov cocktails": {
+   "def": "Weapon_GrenadeMolotov",
+   "ranged": true,
+   "range": 12.9,
+   "warmup": 1.5,
+   "source": "Core"
+  },
+  "monosword": {
+   "def": "MeleeWeapon_MonoSword",
+   "ranged": false,
+   "range": null,
+   "warmup": null,
+   "source": "Royalty"
+  },
+  "mortar": {
+   "def": "Artillery_Mortar",
+   "ranged": true,
+   "range": 500.0,
+   "warmup": 4.0,
+   "source": "Core"
+  },
+  "needle gun": {
+   "def": "Gun_Needle",
+   "ranged": true,
+   "range": 44.9,
+   "warmup": 2.5,
+   "source": "Core"
+  },
+  "needle launcher": {
+   "def": "Gun_NeedleLauncher",
+   "ranged": true,
+   "range": 24.9,
+   "warmup": 2.5,
+   "source": "Biotech"
+  },
+  "needle shot": {
+   "def": "Bullet_NeedleGun",
+   "ranged": false,
+   "range": null,
+   "warmup": null,
+   "source": "Core"
+  },
+  "nerve spiker": {
+   "def": "NerveSpiker",
+   "ranged": true,
+   "range": 29.9,
+   "warmup": 1.45,
+   "source": "Anomaly"
+  },
+  "persona monosword": {
+   "def": "MeleeWeapon_MonoSwordBladelink",
+   "ranged": false,
+   "range": null,
+   "warmup": null,
+   "source": "Royalty"
+  },
+  "persona plasmasword": {
+   "def": "MeleeWeapon_PlasmaSwordBladelink",
+   "ranged": false,
+   "range": null,
+   "warmup": null,
+   "source": "Royalty"
+  },
+  "persona zeushammer": {
+   "def": "MeleeWeapon_ZeusHammerBladelink",
+   "ranged": false,
+   "range": null,
+   "warmup": null,
+   "source": "Royalty"
+  },
+  "pila": {
+   "def": "Pila",
+   "ranged": true,
+   "range": 18.9,
+   "warmup": 4.0,
+   "source": "Core"
+  },
+  "plasmasword": {
+   "def": "MeleeWeapon_PlasmaSword",
+   "ranged": false,
+   "range": null,
+   "warmup": null,
+   "source": "Royalty"
+  },
+  "pump shotgun": {
+   "def": "Gun_PumpShotgun",
+   "ranged": true,
+   "range": 15.9,
+   "warmup": 0.9,
+   "source": "Core"
+  },
+  "recurve bow": {
+   "def": "Bow_Recurve",
+   "ranged": true,
+   "range": 25.9,
+   "warmup": 1.45,
+   "source": "Core"
+  },
+  "revolver": {
+   "def": "Gun_Revolver",
+   "ranged": true,
+   "range": 25.9,
+   "warmup": 0.3,
+   "source": "Core"
+  },
+  "rocketswarm tube": {
+   "def": "Gun_RocketswarmLauncher",
+   "ranged": true,
+   "range": 29.9,
+   "warmup": null,
+   "source": "Core"
+  },
+  "scattergun": {
+   "def": "Gun_Scattergun",
+   "ranged": true,
+   "range": 19.9,
+   "warmup": 0.55,
+   "source": "Odyssey"
+  },
+  "short bow": {
+   "def": "Bow_Short",
+   "ranged": true,
+   "range": 22.9,
+   "warmup": 1.35,
+   "source": "Core"
+  },
+  "slugthrower": {
+   "def": "Gun_Slugthrower",
+   "ranged": true,
+   "range": 19.9,
+   "warmup": 0.3,
+   "source": "Biotech"
+  },
+  "smoke launcher": {
+   "def": "Gun_SmokeLauncher",
+   "ranged": true,
+   "range": 23.9,
+   "warmup": 3.5,
+   "source": "Core"
+  },
+  "sniper rifle": {
+   "def": "Gun_SniperRifle",
+   "ranged": true,
+   "range": 44.9,
+   "warmup": 3.5,
+   "source": "Core"
+  },
+  "spear": {
+   "def": "MeleeWeapon_Spear",
+   "ranged": false,
+   "range": null,
+   "warmup": null,
+   "source": "Core"
+  },
+  "spiner": {
+   "def": "Gun_Spiner",
+   "ranged": true,
+   "range": 6.9,
+   "warmup": 0.3,
+   "source": "Biotech"
+  },
+  "tactical turret gun": {
+   "def": "Gun_TacticalTurret",
+   "ranged": true,
+   "range": 19.9,
+   "warmup": 0.0,
+   "source": "Anomaly"
+  },
+  "thump cannon": {
+   "def": "Gun_ThumpCannon",
+   "ranged": true,
+   "range": 24.9,
+   "warmup": 1.0,
+   "source": "Core"
+  },
+  "tox grenades": {
+   "def": "Weapon_GrenadeTox",
+   "ranged": true,
+   "range": 12.9,
+   "warmup": 1.5,
+   "source": "Biotech"
+  },
+  "toxbomb launcher": {
+   "def": "Gun_ToxbombLauncher",
+   "ranged": true,
+   "range": 23.9,
+   "warmup": 3.5,
+   "source": "Biotech"
+  },
+  "toxic needle": {
+   "def": "Bullet_ToxicNeedleGun",
+   "ranged": false,
+   "range": null,
+   "warmup": null,
+   "source": "Biotech"
+  },
+  "toxic needle gun": {
+   "def": "Gun_ToxicNeedle",
+   "ranged": true,
+   "range": 44.9,
+   "warmup": 2.35,
+   "source": "Biotech"
+  },
+  "triple rocket launcher": {
+   "def": "Gun_TripleRocket",
+   "ranged": true,
+   "range": 35.9,
+   "warmup": 4.5,
+   "source": "Core"
+  },
+  "unfinished gun": {
+   "def": "UnfinishedGun",
+   "ranged": false,
+   "range": null,
+   "warmup": null,
+   "source": "Core"
+  },
+  "unfinished weapon": {
+   "def": "UnfinishedWeapon",
+   "ranged": false,
+   "range": null,
+   "warmup": null,
+   "source": "Core"
+  },
+  "unique assault rifle": {
+   "def": "Gun_AssaultRifle_Unique",
+   "ranged": true,
+   "range": 30.9,
+   "warmup": 1.0,
+   "source": "Odyssey"
+  },
+  "unique beam repeater": {
+   "def": "Gun_BeamRepeater_Unique",
+   "ranged": true,
+   "range": 21.9,
+   "warmup": 4.0,
+   "source": "Odyssey"
+  },
+  "unique bolt-action rifle": {
+   "def": "Gun_BoltActionRifle_Unique",
+   "ranged": true,
+   "range": 36.9,
+   "warmup": 1.7,
+   "source": "Odyssey"
+  },
+  "unique chain shotgun": {
+   "def": "Gun_ChainShotgun_Unique",
+   "ranged": true,
+   "range": 12.9,
+   "warmup": 1.2,
+   "source": "Odyssey"
+  },
+  "unique charge lance": {
+   "def": "Gun_ChargeLance_Unique",
+   "ranged": true,
+   "range": 32.9,
+   "warmup": 1.7,
+   "source": "Odyssey"
+  },
+  "unique charge rifle": {
+   "def": "Gun_ChargeRifle_Unique",
+   "ranged": true,
+   "range": 27.9,
+   "warmup": 1.0,
+   "source": "Odyssey"
+  },
+  "unique greatbow": {
+   "def": "Bow_Great_Unique",
+   "ranged": true,
+   "range": 29.9,
+   "warmup": 2.0,
+   "source": "Odyssey"
+  },
+  "unique heavy smg": {
+   "def": "Gun_HeavySMG_Unique",
+   "ranged": true,
+   "range": 22.9,
+   "warmup": 0.9,
+   "source": "Odyssey"
+  },
+  "unique hellcat rifle": {
+   "def": "Gun_HellcatRifle_Unique",
+   "ranged": true,
+   "range": 26.9,
+   "warmup": 1.1,
+   "source": "Odyssey"
+  },
+  "unique lmg": {
+   "def": "Gun_LMG_Unique",
+   "ranged": true,
+   "range": 25.9,
+   "warmup": 1.8,
+   "source": "Odyssey"
+  },
+  "unique minigun": {
+   "def": "Gun_Minigun_Unique",
+   "ranged": true,
+   "range": 30.9,
+   "warmup": 2.5,
+   "source": "Odyssey"
+  },
+  "unique revolver": {
+   "def": "Gun_Revolver_Unique",
+   "ranged": true,
+   "range": 25.9,
+   "warmup": 0.3,
+   "source": "Odyssey"
+  },
+  "unique sniper rifle": {
+   "def": "Gun_SniperRifle_Unique",
+   "ranged": true,
+   "range": 44.9,
+   "warmup": 3.5,
+   "source": "Odyssey"
+  },
+  "uranium slug cannon": {
+   "def": "Gun_TurretSniper",
+   "ranged": true,
+   "range": 45.9,
+   "warmup": 0.0,
+   "source": "Core"
+  },
+  "warhammer": {
+   "def": "MeleeWeapon_Warhammer",
+   "ranged": false,
+   "range": null,
+   "warmup": null,
+   "source": "Royalty"
+  },
+  "zeushammer": {
+   "def": "MeleeWeapon_Zeushammer",
+   "ranged": false,
+   "range": null,
+   "warmup": null,
+   "source": "Royalty"
+  }
+ }
+}

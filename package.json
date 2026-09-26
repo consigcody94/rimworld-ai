@@ -5,8 +5,20 @@
   "description": "Autonomous RimWorld colony agent and Twitch streaming studio for the RimWorld AI Bridge mod.",
   "scripts": {
     "test": "node --test scripts/ stream-app/",
+    "preflight": "node scripts/stack.mjs preflight",
+    "status": "node scripts/stack.mjs status",
+    "report": "node scripts/stack.mjs report",
+    "pause": "node scripts/stack.mjs pause",
+    "resume": "node scripts/stack.mjs resume",
+    "up": "node scripts/stack.mjs up",
+    "down": "node scripts/stack.mjs down",
     "agent": "node scripts/colony-agent.mjs",
-    "studio": "node stream-app/server.mjs"
+    "studio": "node stream-app/server.mjs",
+    "supervisor": "node scripts/supervisor.mjs",
+    "install:mod": "bash scripts/install-mod.sh",
+    "build:stream": "bash scripts/build-stream.sh",
+    "build:mcp": "cd mcp && npm install --no-audit --no-fund && npm run build",
+    "build:data": "python3 scripts/extract-game-data.py"
   },
   "engines": { "node": ">=18" }
 }

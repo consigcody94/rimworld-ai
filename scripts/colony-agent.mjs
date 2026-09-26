@@ -23,6 +23,11 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  decideCombat, approachPoint, weaponInfo, isRangedWeapon, isHumanlikeThreat, animalInfo,
+  nextIntroEvent, scriptedThreatWindow, tickToDayHour, wantsFoodPhase, weaponPreferenceFromThoughts,
+  INTRO_EVENTS,
+} from "./tactics.mjs";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const STATE_DIR = path.join(ROOT, ".agent-state");
@@ -58,8 +63,15 @@ async function request(method, path, body = null, timeoutMs = 30000) {
 const api = {
   get: (path) => request("GET", path),
   post: (path, body) => request("POST", path, body),
-  /** POST that swallows errors and returns null. Most game orders are best-effort. */
-  tryPost: async (path, body) => { try { return await request("POST", path, body); } catch { return null; } },
+  /** Best-effort orders are logged; lease conflicts must stop the turn. */
+  tryPost: async (path, body) => {
+    try { return await request("POST", path, body); }
+    catch (error) {
+      if (error.status === 423) throw error;
+      console.warn(`[Bridge] POST ${path} failed: ${error.message}`);
+      return null;
+    }
+  },
 };
 
 async function studio(path, body) {
@@ -138,7 +150,7 @@ const TINY_GAME = [
 const DANGEROUS_GAME = ["bear", "wolf", "warg", "cougar", "panther", "lynx", "boar", "boomalope", "boomrat", "rhino", "elephant", "thrumbo", "megasloth", "muffalo", "bison", "alpaca", "deer", "elk", "caribou", "horse", "donkey"];
 
 /** The run's objective. Everything in manageGrowth exists to reach this. */
-const POPULATION_TARGET = Number(process.env.POPULATION_TARGET ?? 10);
+const POPULATION_TARGET = Number(process.env.POPULATION_TARGET ?? 50);
 
 /** Letter labels that mean a person may be joining. Cast wide: this is the growth path. */
 const JOIN_LETTER = /join|wander|refugee|joins|asks to join|ally|gift|escape pod|crash|survivor|shelter|seeks|stranger|man in black|beggar/;
@@ -183,17 +195,24 @@ export class ColonyAgent {
     this.lastRoutine = new Map();  // routine -> turn
     this.followTarget = null;
     this.followSince = 0;
+    this.followCombat = false;
     this.foodEmergency = false;
     this.weaponRush = false;
     this.workPlanMode = null;
     this.appliedSchedule = new Map();  // pawn id -> schedule preset last applied
     this.helpless = false;
-    this.fleeSet = new Set();
     this.evadeGoal = new Map();
     this.seenQuests = new Set();
     this.lastKnownPopulation = null;
     this.skillCache = new Map();
-    this.stats = { turns: 0, combatTurns: 0, orders: 0, errors: 0 };
+    this.stats = { turns: 0, combatTurns: 0, orders: 0, errors: 0, busy: 0 };
+    this.storyteller = null;          // read from /status once; decides whether the intro script applies
+    this.announcedIntro = new Set();  // scripted incidents already announced to the stream
+    this.weaponPreference = null;     // "melee" | "ranged" once the ideoligion has said which it despises
+    this.hostilitySet = new Map();    // pawn id -> hostility response last applied
+    this.milestones = new Map();      // key -> { tick, day, text }, one entry per achievement
+    this.shelterSince = null;
+    this.lastWoodOrderTurn = 0;       // the wood-starved kick waits 120 turns from here
   }
 
   // ---------------------------------------------------------------- journal
@@ -268,6 +287,12 @@ export class ColonyAgent {
       "## Colonists",
       ...(cols.length ? cols.map((c) => `- ${c.name}: ${Math.round((c.health?.pct ?? 1) * 100)}% health, mood ${Math.round((c.needs?.mood ?? 0) * 100)}%, ${c.weapon ? `armed with ${c.weapon}` : "unarmed"}`) : ["- none"]),
       "",
+      "## Milestones",
+      ...(this.milestones.size
+        ? [...this.milestones.values()].map((m) => `- ${m.when}: ${m.text}`)
+        : ["- none yet"]),
+      ...(this.endCause ? ["", `Ended: ${this.endCause}`] : []),
+      "",
       "## Event counts",
       ...Object.entries(this.journalCounts).sort((a, b) => b[1] - a[1]).map(([k, v]) => `- ${k}: ${v}`),
       "",
@@ -315,11 +340,75 @@ export class ColonyAgent {
     return true;
   }
 
+  /**
+   * Proof of life for the supervisor. A dead agent gets restarted; a hung one, stuck in a request
+   * or a loop, used to look alive from the outside for as long as the process existed. The
+   * supervisor kills anything whose heartbeat is older than two minutes.
+   */
+  heartbeat() {
+    try {
+      mkdirSync(STATE_DIR, { recursive: true });
+      writeFileSync(path.join(STATE_DIR, "heartbeat.json"), JSON.stringify({
+        at: Date.now(), pid: process.pid, turn: this.turn, tick: this.lastTick ?? null,
+      }));
+    } catch {}
+  }
+
+  /**
+   * The colonist standing around while there is work on the board is the failure a human notices
+   * first and the one this agent noticed last. Twenty five turns of idling in peacetime with
+   * blueprints waiting, or wood short with no tree marked, and the colony is unstuck by force:
+   * work plan re-applied, everything near home unforbidden, trees designated whatever the food
+   * flag says. Each kick is journaled with what was seen, so a stall that repeats is findable.
+   */
+  async detectStall(colonists, snap, resources) {
+    if (this.inCombat) { this.idleTurns = 0; return; }
+    const idle = colonists.every((c) => c.downed || c.asleep || c.inBed || c.mentalState || IDLE_JOBS.has(c.job?.def ?? "") || !c.job?.def);
+    const anyoneUp = colonists.some((c) => !c.downed && !c.asleep && !c.inBed && !c.mentalState);
+    this.idleTurns = idle && anyoneUp ? (this.idleTurns ?? 0) + 1 : 0;
+    const wood = resources.WoodLog ?? 0;
+    const need = this.woodNeeded(resources);
+    const wallsWaiting = (this.pendingBuilds ?? 0) > 0 || Boolean(this.roomInProgress);
+    const woodStarved = wallsWaiting && wood < need && this.turn - (this.lastWoodOrderTurn ?? -999) > 120;
+    if (this.idleTurns < 25 && !woodStarved) return;
+    if (!this.every("unstick", 60)) return;
+    const marked = this.pendingTrees ?? 0;
+    const why = this.idleTurns >= 25
+      ? `${colonists.map((c) => c.name).join(", ")} idle for ${this.idleTurns} turns with ${this.pendingBuilds ?? 0} blueprint(s) waiting, ${wood} wood and ${marked} tree(s) already marked`
+      : `${wood} wood against ${need} needed for ${this.woodReason}, ${marked} tree(s) marked and not being cut, no new tree ordered in ${this.turn - (this.lastWoodOrderTurn ?? 0)} turns`;
+    this.journal("stall", { why, idleTurns: this.idleTurns, wood, need, pendingBuilds: this.pendingBuilds ?? 0, foodEmergency: this.foodEmergency }, snap);
+    this.log(`STALL ${why}. Kicking: work plan, unforbid, trees.`);
+    await this.thought(`Nothing is getting done: ${why}. Re-issuing the work plan and going for wood.`);
+    this.idleTurns = 0;
+    for (const c of colonists) this.configured.delete(`work-${c.id}`);
+    this.workPlanMode = null;
+    await this.syncWorkPlan(colonists);
+    await api.tryPost("/allow", { home: true });
+    this.lastRoutine.delete("allow-food");
+    await this.allowFood();
+    const worker = colonists.find((c) => !c.downed && !c.mentalState) ?? colonists[0];
+    if (wood < need) await this.manageWood(resources, { force: true, near: worker });
+    for (const c of colonists) if (c.drafted && !this.inCombat) await api.tryPost("/draft", { pawn: c.id, drafted: false });
+  }
+
+  /**
+   * Record an achievement once. The run summary lists them, so "how far did this colony get"
+   * has an answer without reading the journal end to end, and runs can be compared.
+   */
+  milestone(key, text) {
+    if (this.milestones.has(key)) return false;
+    const when = this.lastTick != null ? tickToDayHour(this.lastTick).text : "?";
+    this.milestones.set(key, { when, text, tick: this.lastTick });
+    this.journal("milestone", { key, text });
+    this.log(`MILESTONE ${text}`);
+    return true;
+  }
+
   // ---------------------------------------------------------------- lifecycle
 
   async ensureLease() {
     if (Date.now() - this.lastLease < 60000) return;
-    await api.tryPost("/agent/claim", { agent: AGENT_ID, leaseSec: 300 });
+    await api.post("/agent/claim", { agent: AGENT_ID, leaseSec: 300 });
     this.lastLease = Date.now();
   }
 
@@ -346,9 +435,17 @@ export class ColonyAgent {
         count++;
         await sleep(combat ? this.combatMs : this.stepMs);
       } catch (err) {
-        this.stats.errors++;
-        this.log(`TURN ERROR ${err.message}`);
-        this.journal("error", { message: err.message, status: err.status ?? null });
+        // A 503 is the game saving or loading, which the agent itself causes once a day with the
+        // daily save. It was logged and journaled as an error every single day of every run,
+        // which buried the real errors and made every run summary look broken.
+        if (err.status === 503) {
+          this.stats.busy++;
+          if (this.every("busy-note", 20)) this.log("Game is busy saving or loading; waiting for it.");
+        } else {
+          this.stats.errors++;
+          this.log(`TURN ERROR ${err.message}`);
+          this.journal("error", { message: err.message, status: err.status ?? null });
+        }
         if (/not in playing|unreachable|fetch failed|timeout|HTTP 409|HTTP 503/i.test(err.message)) {
           await this.waitUntilPlaying();
         } else {
@@ -363,6 +460,21 @@ export class ColonyAgent {
   async runTurn() {
     this.turn++;
     this.stats.turns++;
+    this.heartbeat();
+    // `npm run pause` drops a file; a human or another AI is playing by hand. Idle, keep the
+    // heartbeat going so the supervisor does not restart us, and release the lease so their
+    // orders are accepted.
+    if (existsSync(path.join(STATE_DIR, "pause"))) {
+      if (!this.paused) {
+        this.paused = true;
+        this.lastLease = 0;
+        await api.tryPost("/agent/release", { agent: AGENT_ID });
+        this.log("Paused by npm run pause: issuing no orders until npm run resume.");
+      }
+      await sleep(3000);
+      return false;
+    }
+    if (this.paused) { this.paused = false; this.log("Resumed."); }
     await this.ensureLease();
 
     const snap = await api.get("/snapshot");
@@ -377,19 +489,38 @@ export class ColonyAgent {
     const day = Math.floor((snap.tick ?? 0) / 60000) + 1;
     if (this.every("built-scan", 6)) {
       try {
-        const sum = await api.get("/things/summary?cat=Building&player=1");
+        const [sum, eth] = await Promise.all([
+          api.get("/things/summary?cat=Building&player=1").catch(() => ({})),
+          api.get("/things/summary?cat=Ethereal").catch(() => ({}))
+        ]);
         this.builtDefs = new Set((sum.groups ?? []).map((g) => g.def));
+        const pendingCount = (eth.groups ?? [])
+          .filter((g) => /^(Blueprint|Frame)_/i.test(g.def ?? ""))
+          .reduce((a, b) => a + (b.count ?? 1), 0);
+        this.pendingBuilds = pendingCount;
+        await this.checkHallStands();
       } catch {}
     }
 
     if (colonists.length === 0) {
-      await this.thought("No living colonists. Waiting for a game with colonists.");
+      // Say it once, with the cause, and close the run's record. This used to post the same
+      // thought every five seconds for as long as the process lived, and the summary never
+      // said how the colony ended.
+      if (!this.endCause) {
+        this.endCause = this.lastLoss ?? "no living colonists left on the map";
+        this.journal("colony-lost", { cause: this.endCause }, snap);
+        this.writeRunSummary(snap);
+        await this.thought(`No living colonists: ${this.endCause}. Waiting for a new game.`);
+      }
       await sleep(5000);
       return false;
     }
 
     // First contact: anchor the base on the founder and set the colony up.
     if (!this.base) await this.foundColony(snap, colonists);
+    if (this.storyteller === null) {
+      try { this.storyteller = (await api.get("/status")).storyteller ?? ""; } catch { this.storyteller = ""; }
+    }
 
     // Never sit paused: close popups and restore speed. Dialogs like settlement naming get accepted.
     if (snap.paused) {
@@ -397,12 +528,17 @@ export class ColonyAgent {
     }
 
     const threats = this.activeThreats(colonists, hostiles);
+    await this.trackMilestones(colonists, snap, threats);
     if (threats.length > 0) {
       await this.combatTurn(colonists, threats, snap);
       // A helpless colony should not spin at combat cadence; pace it like peacetime.
       return !this.helpless;
     }
     if (this.inCombat) await this.endCombat(colonists);
+
+    // The storyteller's first week is a timetable, not a dice roll. Get ready for it.
+    await this.prepareForScriptedThreats(colonists, snap, resources);
+    await this.detectStall(colonists, snap, resources);
 
     // Adaptive: fast through the grind, back to 1 the moment anything needs a decision.
     const want = this.autoSpeed ? this.desiredSpeed(colonists, snap, threats) : this.speed;
@@ -472,12 +608,14 @@ export class ColonyAgent {
         // someone is genuinely close to collapsing, and not merely because food is short: at
         // forty percent fed with berries in the pile, an hour with an axe is worth more than
         // another hour of picking.
-        const collapsing = (this.hungriest ?? 1) < 0.28;
+        // 0.2, and only trees this agent designated: a human watching the stream may have marked
+        // trees by hand, and cancelling those every ten turns is the worst kind of "help".
+        const collapsing = (this.hungriest ?? 1) < 0.2;
         const built = this.builtDefs ?? new Set();
         const needsFire = !built.has("Campfire") && (resources.WoodLog ?? 0) < 25;
         if (collapsing && !needsFire) {
           if (this.every("clear-chop", 10)) await this.clearWoodDesignations();
-        } else if (((resources.WoodLog ?? 0) < 30 || needsFire) && this.every("wood-for-fire", 10)) {
+        } else if (this.every("wood", 10)) {
           await this.manageWood(resources);
         }
         if (this.every("food", 3)) await this.manageFood(colonists, snap, resources);
@@ -540,16 +678,27 @@ export class ColonyAgent {
         if (this.every("steel", 40)) await this.manageSteel(resources, colonists, day);
         if (this.every("build", 12)) await this.manageBase(colonists, resources);
         if (this.every("bills", 25)) await this.manageBills(resources);
-        if (this.every("research", 20)) await this.manageResearch(snap.research);
         if (this.every("trade", 20)) await this.manageTrade();
-        await this.manageGrowth(colonists, snap, resources);
-        if (this.every("prisoners", 15)) await this.managePrisoners(colonists, snap);
         break;
     }
+    // Population bookkeeping, beds for newcomers and fields that scale with the colony. A recruit
+    // can join in any phase, so this cannot wait for "grow".
+    await this.manageGrowth(colonists, snap, resources);
 
     // 3. Always on, cheap, and needed in every phase.
+    //
+    // Research, rescue, capture and prisoners all used to live in the "grow" branch above, and no
+    // colony has ever reached it: the gate in front of it checked a "hut" key that the room plan
+    // stopped setting, so every run on record spent its whole life in food, basics and house.
+    // No research project was ever chosen, and the day-6 raider, whom the game forces to be
+    // downed rather than killed, lay on the map with nobody told to pick him up.
+    if (this.every("research", 20)) await this.manageResearch(snap.research);
+    if (this.every("rescue", 10)) await this.rescueDowned(colonists);
+    if (this.every("capture", 8)) await this.captureDowned(colonists, snap);
+    if (this.every("prisoners", 15)) await this.managePrisoners(colonists, snap);
+    if (this.every("quests", 40)) await this.manageQuests(snap);
     await this.manageCorpses();
-    await this.manageUpgrades();
+    await this.manageUpgrades(colonists);
     if (this.every("work", 30)) await this.manageWork(colonists);
     await this.enableAllWork(colonists);
     if (this.every("supplies", 40)) await this.manageSupplies(resources);
@@ -641,7 +790,9 @@ export class ColonyAgent {
     this.foodDays = daysOfFood;
     this.cropDays = cropDays;
     this.hungriest = hungriest;
-    if (hungriest < 0.45 || supply < 1.5) {
+    const earlyBaseNeeded = !built.has("Campfire") || !this.hasAnyBed(built) || !this.placed.has("room-hall");
+    const foodUrgent = wantsFoodPhase({ hungriest, supply, earlyBaseNeeded, inFoodPhase: this.phase === "food" });
+    if (foodUrgent) {
       this.phaseReason = `Food first: the hungriest colonist is at ${Math.round(hungriest * 100)} percent, ${daysOfFood.toFixed(1)} days stored` +
         (cropDays > 0 ? ` and about ${cropDays.toFixed(1)} more standing in the fields.` : ".");
       return "food";
@@ -659,7 +810,14 @@ export class ColonyAgent {
         : "A bed next: sleeping on the ground costs mood every single night, and it is forty five wood.";
       return "basics";
     }
-    if (!this.placed.has("hut")) {
+    // The house phase ends when the great hall stands, or two days after it was laid out if
+    // something keeps it from closing, so a blocked wall can never hold the colony here forever.
+    //
+    // This gate used to read a "hut" key that nothing has set since the house became a plan of
+    // rooms. Every run on record therefore stopped here, and the phases behind it (comfort,
+    // weapon, farm, grow) never ran once in fourteen journals: no research, no mining, no
+    // defenses, no trading, no recruiting.
+    if (!this.houseDone(snap)) {
       this.phaseReason = `Walls and a roof now, with ${wood} wood on hand. Sleeping outside is worth about minus fifteen mood a night on its own.`;
       return "house";
     }
@@ -697,6 +855,17 @@ export class ColonyAgent {
     return false;
   }
 
+  /**
+   * Has the colony got its house? The great hall standing, or laid out two in-game days ago.
+   * The second half is a floor, not the goal: a wall cell the game keeps refusing must not pin the
+   * colony in the house phase forever, which is how the "hut" key failed.
+   */
+  houseDone(snap) {
+    if (!this.placed.has("room-hall")) return false;
+    if (this.shelter()?.usable) return true;
+    return (snap?.tick ?? 0) - (this.hallPlacedTick ?? 0) > 120000;
+  }
+
   // ---------------------------------------------------------------- founding
 
   stateFile(snap) {
@@ -704,11 +873,21 @@ export class ColonyAgent {
     return path.join(STATE_DIR, `${key}.json`);
   }
 
-  loadState(snap) {
+  loadState(snap, colonists) {
     try {
       const f = this.stateFile(snap);
       if (!existsSync(f)) return null;
-      return JSON.parse(readFileSync(f, "utf8"));
+      const saved = JSON.parse(readFileSync(f, "utf8"));
+      // Colony names are reusable. A new world with the same name must not inherit the
+      // previous map's base, zones or blueprint ledger.
+      if (!saved.mapTile || saved.mapTile !== this.mapTile ||
+          (saved.lastTick != null && snap.tick + 600 < saved.lastTick) ||
+          (snap.tick < 60000 && saved.founderId != null &&
+           saved.founderId !== colonists[0]?.id)) {
+        this.log("Ignoring saved state from a different colony or an earlier game tick.");
+        return null;
+      }
+      return saved;
     } catch { return null; }
   }
 
@@ -718,8 +897,16 @@ export class ColonyAgent {
       writeFileSync(this.stateFile(snap), JSON.stringify({
         base: this.base,
         mapSize: this.mapSize,
+        mapTile: this.mapTile,
+        founderId: this.founderId,
+        lastTick: snap.tick,
         zones: [...this.zones],
         placed: [...this.placed.entries()],
+        milestones: [...this.milestones.entries()],
+        hallPlacedTick: this.hallPlacedTick ?? null,
+        weaponPreference: this.weaponPreference,
+        roomInProgress: this.roomInProgress ?? null,
+        roomObstacles: [...(this.roomObstacles ?? new Map()).entries()],
       }, null, 2));
     } catch {}
   }
@@ -740,23 +927,35 @@ export class ColonyAgent {
   async chooseBase(founder) {
     const margin = 30, size = this.mapSize ?? 250, max = size - margin;
     const clamp = (v) => Math.round(Math.min(max, Math.max(margin, v)));
-    const fallback = { x: clamp(founder.x), z: clamp(founder.z) };
-
     let best = null;
     try {
       const scan = await api.get(`/fertility?x=${Math.round(founder.x)}&z=${Math.round(founder.z)}&w=56&h=56&block=7&min=0.95&limit=30`);
-      const near = (scan.best ?? []).filter((c) => c.distanceFromCentre <= 26);
+      const near = (scan.best ?? []).filter((c) => c.distanceFromCentre <= 26).slice(0, 12);
       for (const soil of near) {
-        // House core sits east of the field, with the workshop's west wall clear of the last row.
-        const cand = { x: clamp(soil.x + 19), z: clamp(soil.z + 3) };
-        if (dist(cand, founder) > 30) continue;
-        if (await this.buildableGround(cand)) { best = { cand, soil }; break; }
+        // Rich soil may border a mudflat. Try each side before discarding this field.
+        for (const [dx, dz] of [[19, 3], [-19, 3], [3, 19], [3, -19]]) {
+          const cand = { x: clamp(soil.x + dx), z: clamp(soil.z + dz) };
+          if (dist(cand, founder) > 34) continue;
+          if (await this.buildableGround(cand)) { best = { cand, soil }; break; }
+        }
+        if (best) break;
       }
     } catch {}
 
     if (!best) {
-      this.log("No fertile block close enough to build beside; anchoring on the founder.");
-      return fallback;
+      // The founder's landing cell can itself be mud. Probe nearby dry footprints before
+      // placing anything; walkable terrain is not necessarily buildable terrain.
+      for (const r of [0, 8, 16, 24]) {
+        const offsets = r ? [[r, 0], [-r, 0], [0, r], [0, -r], [r, r], [r, -r], [-r, r], [-r, -r]] : [[0, 0]];
+        for (const [dx, dz] of offsets) {
+          const cand = { x: clamp(founder.x + dx), z: clamp(founder.z + dz) };
+          if (await this.buildableGround(cand)) {
+            this.log(`No safe footprint beside the best soil; using dry ground at (${cand.x}, ${cand.z}).`);
+            return cand;
+          }
+        }
+      }
+      throw new Error("No dry, revealed building footprint near the founder.");
     }
     this.log(`Base at (${best.cand.x}, ${best.cand.z}), ${best.soil.distanceFromCentre} cells from the founder, with ${best.soil.fertility} fertility soil starting ${best.cand.x - best.soil.x - 7} cells west of the workshop wall.`);
     return best.cand;
@@ -773,7 +972,8 @@ export class ColonyAgent {
    * read "doing: Campfire", and not one blueprint existed.
    */
   async buildableGround(b) {
-    const samples = [[0, 0], [-8, 0], [14, 0], [0, -8], [0, 8], [-8, -8], [14, 8], [0, 20]];
+    const samples = [[0, 0], [-8, 0], [14, 0], [0, -8], [0, 8], [-8, -8], [14, 8],
+                     [14, -8], [-8, 8], [0, 20], [-4, 4], [4, 4], [-4, -4], [4, -4]];
     try {
       const cells = await Promise.all(samples.map(([dx, dz]) =>
         api.get(`/cell?x=${b.x + dx}&z=${b.z + dz}`).catch(() => null)));
@@ -782,28 +982,35 @@ export class ColonyAgent {
         if (!c) { bad++; continue; }
         if (c.fogged) fogged++;
         const terrain = String(c.terrain ?? "");
-        if (/Water|Marsh|Lake|Ice/i.test(terrain)) bad++;
+        if (/Water|Marsh|Lake|Ice|Mud|Bog/i.test(terrain)) bad++;
       }
       // Any fog in the footprint at all disqualifies the site: a colony cannot build its way out
       // of ground it has not seen, and it will not wander there on its own to reveal it.
       if (fogged > 0) return false;
-      return bad <= 1;
-    } catch { return true; }
+      return bad === 0;
+    } catch { return false; }
   }
 
   async foundColony(snap, colonists) {
     try {
       const m = await api.get("/map");
       this.mapSize = m.size?.x ?? 250;
-    } catch { this.mapSize = 250; }
+      this.mapTile = m.tile ?? null;
+    } catch { this.mapSize = 250; this.mapTile = null; }
 
     // A base anchor is permanent for the life of a colony: reload it rather than
     // re-anchoring wherever the founder happens to be standing after a restart.
-    const saved = this.loadState(snap);
+    const saved = this.loadState(snap, colonists);
     if (saved?.base) {
       this.base = saved.base;
+      this.founderId = saved.founderId;
       for (const z of saved.zones ?? []) this.zones.add(z);
       for (const [k, v] of saved.placed ?? []) this.placed.set(k, v);
+      for (const [k, v] of saved.milestones ?? []) this.milestones.set(k, v);
+      this.hallPlacedTick = saved.hallPlacedTick ?? null;
+      this.weaponPreference = saved.weaponPreference ?? null;
+      this.roomInProgress = saved.roomInProgress ?? null;
+      this.roomObstacles = new Map(saved.roomObstacles ?? []);
       this.log(`Resuming colony at saved base (${this.base.x}, ${this.base.z}).`);
       await this.thought(`Resuming ${snap.colonyName ?? "the colony"} at (${this.base.x}, ${this.base.z}).`);
       return;
@@ -811,6 +1018,7 @@ export class ColonyAgent {
 
     // Fresh colony: put the house beside the best farmland, not on top of it.
     const founder = colonists[0];
+    this.founderId = founder.id;
     this.base = await this.chooseBase(founder);
     const b = this.base;
     this.log(`Founding colony at (${b.x}, ${b.z}) with ${colonists.map((c) => c.name).join(", ")}.`);
@@ -872,40 +1080,12 @@ export class ColonyAgent {
     });
   }
 
-  isHumanlike(t) {
-    return Boolean(t.gender) || Boolean(t.faction) || /raider|pirate|tribal|mercenary|scavenger|outlander|soldier|thief|hunter|warrior|grenadier|sniper/i.test(`${t.kind ?? ""} ${t.faction ?? ""}`);
-  }
-
-  isBigAnimal(t) {
-    const k = (t.kind ?? "").toLowerCase();
-    return DANGEROUS_GAME.some((d) => k.includes(d));
-  }
-
-  /** A point `range` cells from `from`, directly away from `threat`, clamped to the map. */
-  awayFrom(from, threat, range = 28) {
-    const dx = from.x - threat.x, dz = from.z - threat.z;
-    const len = Math.hypot(dx, dz) || 1;
-    const size = this.mapSize ?? 250;
-    const x = Math.round(Math.min(size - 8, Math.max(8, from.x + (dx / len) * range)));
-    const z = Math.round(Math.min(size - 8, Math.max(8, from.z + (dz / len) * range)));
-    return { x, z };
-  }
-
-  /** Does this hostile shoot? A ranged attacker cannot be out-walked; a melee one can be fought. */
+  /** Does this pawn, colonist or hostile, hold a ranged weapon? Read from the game's weapon table. */
   isRanged(t) {
-    const w = (t.weapon ?? "").toLowerCase();
-    if (!w) return false;
-    return /rifle|gun|pistol|revolver|shotgun|bow|launcher|cannon|charge|sniper|smg|carbine|lmg|minigun|grenade|spear thrower|blowgun/.test(w);
+    return isRangedWeapon(t?.weapon);
   }
 
-  /**
-   * Decide the posture for this fight. Three cases, in order:
-   *  - Any hostile already in melee contact: FIGHT. Walking away from a drawn knife just
-   *    hands the attacker free hits in the back, which is how a solo founder dies.
-   *  - Ranged attackers we cannot answer, a large predator, or being outnumbered 2 to 1: EVADE.
-   *  - Otherwise: FIGHT.
-   */
-  /** Rough melee capability: skill plus whether they are holding anything at all. */
+  /** Rough melee capability: skill plus whether they are holding anything at all. Used by the bare-handed hunt. */
   meleePower(c) {
     const skills = this.skillCache.get(c.id) ?? {};
     const raw = skills.Melee;
@@ -914,43 +1094,49 @@ export class ColonyAgent {
   }
 
   /**
-   * Decide the posture for this fight.
+   * The house as a refuge: its centre, and whether it is one yet.
    *
-   * Learned the hard way, twice: a single colonist with no weapon and Melee 0 does NOT beat a
-   * drifter carrying a knife. The first run fled and was cut down from behind; the second stood
-   * and fought and was beaten unconscious. Neither is survivable, so the only winning move for
-   * an outmatched colony is to break contact early, before the enemy is adjacent, and keep the
-   * colonists inside the base where a door and distance buy time.
+   * A blueprint is not a wall. The hall counts only once nothing on the house is still waiting to
+   * be built, which is exactly what the pending-build scan measures.
+   */
+  shelter() {
+    if (!this.base) return null;
+    return { x: this.base.x, z: this.base.z, usable: Boolean(this.hallStands) };
+  }
+
+  /**
+   * Do the great hall's walls and doors all stand, built rather than blueprinted? Asked of the
+   * world, once per built-scan, and remembered once true. "No blueprints anywhere on the map" was
+   * the first version of this, and a single pending bed or trap made a finished hall read as open.
+   */
+  async checkHallStands() {
+    if (this.hallStands || !this.placed.has("room-hall") || !this.base) return Boolean(this.hallStands);
+    const hall = this.roomPlan(1).find((r) => r.key === "hall");
+    if (!hall) return false;
+    const held = await this.occupancy();
+    this.hallStands = ColonyAgent.perimeter(hall).every(([x, z]) => {
+      const t = held.get(`${x},${z}`);
+      return t && !t.pending;
+    });
+    return this.hallStands;
+  }
+
+  /**
+   * Fight, or get behind a door. The reasoning, and the runs that taught it, are in decideCombat
+   * in tactics.mjs; this only hands it the colony's own facts.
+   *
+   * What it replaced: odds of "skill plus six for a weapon" against "three for any animal", and
+   * an evade that drafted the founder toward a point twenty-eight cells away. Against a vulture
+   * that point was a map corner the game called unreachable, and the founder was downed from
+   * behind two minutes later without a single blow struck.
    */
   decidePosture(colonists, threats) {
-    const able = colonists.filter((c) => !c.downed && (c.health?.pct ?? 1) > 0.25);
-    if (able.length === 0) return { evade: false, reason: "nobody can act" };
-
-    const armedThreats = threats.filter((t) => t.weapon);
-    const ourPower = able.reduce((a, c) => a + this.meleePower(c), 0);
-    // A raider with a weapon is worth roughly a skilled armed colonist.
-    const theirPower = threats.reduce((a, t) => a + (t.weapon ? 8 : 3) + (this.isBigAnimal(t) ? 6 : 0), 0);
-    const outmatched = ourPower < theirPower;
-
-    const inContact = threats.some((t) => able.some((c) => dist(c, t) <= 2.0));
-    if (inContact && !outmatched) {
-      return { evade: false, reason: "already in contact and we can take them" };
-    }
-    if (outmatched) {
-      return {
-        evade: true,
-        reason: `outmatched ${Math.round(ourPower)} to ${Math.round(theirPower)}: ${able.filter((c) => c.weapon).length} of ${able.length} armed against ${armedThreats.length} armed hostile(s)`,
-      };
-    }
-    if (threats.some((t) => this.isBigAnimal(t)) && able.every((c) => !c.weapon)) {
-      return { evade: true, reason: "large predator and nothing to fight it with" };
-    }
-    return { evade: false, reason: `we outweigh them ${Math.round(ourPower)} to ${Math.round(theirPower)}` };
+    return decideCombat({ colonists, threats, skills: this.skillCache, shelter: this.shelter() });
   }
 
   async combatTurn(colonists, threats, snap) {
     this.stats.combatTurns++;
-    const able = colonists.filter((c) => !c.downed && (c.health?.pct ?? 1) > 0.15);
+    const able = colonists.filter((c) => !c.downed && !c.mentalState && (c.health?.pct ?? 1) > 0.15);
 
     // Nobody can act. Holding the game at speed 1 here just makes downed colonists bleed out in
     // real time while the agent issues nothing, so hand the clock back and stop re-entering
@@ -958,9 +1144,16 @@ export class ColonyAgent {
     if (able.length === 0) {
       if (!this.helpless) {
         this.helpless = true;
-        this.log(`COMBAT no able colonists; releasing the clock and waiting for recovery.`);
-        await this.thought(`Every colonist is down or too hurt to fight. Nothing left to order. Letting the clock run and hoping someone gets up.`);
-        await this.narrate("helpless", "colony incapacitated", `All ${colonists.length} colonist(s) are downed or under 15 percent health with ${threats.length} hostile(s) still on the map.`, 0, { priority: "high" });
+        // Say which it is. A founder in a sad-wander break is not "down", and the day-6 raider
+        // found one in exactly that state.
+        const broken = colonists.filter((c) => !c.downed && c.mentalState).length;
+        const why = broken
+          ? `${broken} colonist(s) in a mental break and beyond orders, the rest down or badly hurt`
+          : "every colonist is down or too hurt to fight";
+        this.log(`COMBAT no able colonists (${why}); releasing the clock and waiting for recovery.`);
+        this.journal("helpless", { threats: threats.map((t) => t.kind), broken }, snap);
+        await this.thought(`Nothing left to order: ${why}. Letting the clock run and hoping someone gets up.`);
+        await this.narrate("helpless", "colony incapacitated", `No colonist can act: ${why}, with ${threats.length} hostile(s) still on the map.`, 0, { priority: "high" });
       }
       await api.tryPost("/speed", { speed: this.speed });
       this.inCombat = false;
@@ -968,83 +1161,110 @@ export class ColonyAgent {
     }
     this.helpless = false;
     const armed = able.filter((c) => c.weapon);
-    const posture = this.decidePosture(colonists, threats);
-    // Posture is sticky for a fight: flip-flopping between fleeing and fighting is the worst option.
+    const decision = this.decidePosture(colonists, threats);
+
+    // A posture is kept for the whole fight, because flip-flopping between hiding and fighting is
+    // worse than either. The one exception is contact: once they have reached us, we fight.
     if (!this.inCombat) {
-      this.combatPosture = posture;
+      this.combatPosture = decision;
       this.inCombat = true;
+      this.shelterSince = null;
       const names = [...new Set(threats.map((t) => t.kind ?? t.name))].join(", ");
-      this.log(`COMBAT ${threats.length} threat(s): ${names} (${posture.evade ? "EVADE" : "FIGHT"}: ${posture.reason})`);
+      this.log(`COMBAT ${threats.length} threat(s): ${names} (${decision.posture.toUpperCase()}: ${decision.reason})`);
       this.journal("combat-start", {
-        threats: threats.map((t) => ({ kind: t.kind, weapon: t.weapon ?? null, faction: t.faction ?? null })),
-        posture: posture.evade ? "evade" : "fight",
-        reason: posture.reason,
+        threats: threats.map((t) => ({ kind: t.kind, weapon: t.weapon ?? null, faction: t.faction ?? null, combatPower: animalInfo(t.kind)?.combatPower ?? null })),
+        posture: decision.posture,
+        reason: decision.reason,
+        ours: Math.round(decision.ours),
+        theirs: Math.round(decision.theirs),
         armed: armed.length,
         able: able.length,
       }, snap);
-      await this.thought(`Threat: ${names}. ${posture.evade ? "Evading" : "Fighting"}, because ${posture.reason}.`);
-      await this.narrate("combat", posture.evade ? "threat, evading" : "threat, fighting",
-        `${threats.length} hostile ${names}${threats[0]?.weapon ? ` carrying a ${threats[0].weapon}` : ""}. We have ${armed.length} armed of ${able.length}. Decision: ${posture.evade ? "evade" : "fight"}, because ${posture.reason}. Do not claim anyone is dead, hurt or winning: report only this decision.`,
+      const verb = decision.posture === "shelter" ? "Taking shelter" : "Fighting";
+      await this.thought(`Threat: ${names}. ${verb}, because ${decision.reason}.`);
+      await this.narrate("combat", decision.posture === "shelter" ? "threat, taking shelter" : "threat, fighting",
+        `${threats.length} hostile ${names}${threats[0]?.weapon ? ` carrying a ${threats[0].weapon}` : ""}. We have ${armed.length} armed of ${able.length}. Decision: ${decision.posture}, because ${decision.reason}. Do not claim anyone is dead, hurt or winning: report only this decision.`,
         30000, { priority: "high" });
-    } else if (this.combatPosture?.evade && !posture.evade) {
-      // Contact was made while running. Turn and fight.
-      this.combatPosture = posture;
-      this.log("COMBAT posture switched to FIGHT (contact made).");
-      await this.thought("They caught us. Turning to fight rather than taking hits in the back.");
+    } else if (this.combatPosture?.posture === "shelter" && decision.posture === "fight") {
+      this.combatPosture = decision;
+      this.log(`COMBAT posture switched to FIGHT (${decision.reason}).`);
+      await this.thought("They reached us. Fighting from where we stand rather than taking hits in the back.");
     }
     if (snap.speed !== 1 || snap.paused) await api.tryPost("/speed", { speed: 1 });
 
-    if (this.combatPosture?.evade) {
-      for (const c of able) {
-        const nearest = threats.slice().sort((a, b2) => dist(a, c) - dist(b2, c))[0];
-        if (!nearest) continue;
-        // Hostility response is sticky; setting it every turn just floods the main thread pump.
-        if (!this.fleeSet.has(c.id)) {
-          await api.tryPost("/pawn/settings", { pawn: c.id, hostility: "Flee" });
-          this.fleeSet.add(c.id);
-        }
-        // Run for the base, not simply away: the hut is walled with a door, and standing in the
-        // open getting chased is how both previous founders died. Only pick a new destination
-        // when the current one stops making sense, so the pawn is not restarting its path every
-        // 250 ms and effectively standing still.
-        const homeDist = dist(c, this.base);
-        const threatToHome = dist(nearest, this.base);
-        const goal = (homeDist > 6 && threatToHome > homeDist)
-          ? { x: this.base.x, z: this.base.z }
-          : this.awayFrom(c, nearest, 32);
-        const last = this.evadeGoal.get(c.id);
-        const moved = !last || Math.hypot(last.x - goal.x, last.z - goal.z) > 6;
-        const idle = !(c.job?.def ?? "").startsWith("Goto");
-        if (moved || idle) {
-          this.evadeGoal.set(c.id, goal);
-          await api.tryPost("/move", { pawn: c.id, x: goal.x, z: goal.z, draft: true });
-          this.stats.orders++;
-        }
-      }
-    } else {
-      for (const c of able) {
-        const target = threats.slice().sort((a, b2) => dist(a, c) - dist(b2, c))[0];
-        if (!target) continue;
-        const attacking = (c.job?.def ?? "").toLowerCase().includes("attack");
-        const last = this.lastAttackOrder.get(c.id) ?? -99;
-        if (!attacking || this.turn - last > 8) {
-          await api.tryPost("/attack", { pawn: c.id, target: target.id, draft: true });
-          this.lastAttackOrder.set(c.id, this.turn);
-          this.stats.orders++;
-        }
-      }
-      // Only pull a badly hurt colonist out if someone else is still holding the line.
-      for (const c of colonists) {
-        if (c.downed || (c.health?.pct ?? 1) > 0.3 || able.length <= 1) continue;
-        await api.tryPost("/move", { pawn: c.id, x: this.base.x, z: this.base.z, draft: true });
-      }
-    }
+    if (this.combatPosture?.posture === "shelter") await this.holdInside(able, snap);
+    else await this.fight(able, threats, colonists);
     await this.manageCamera(colonists, true);
   }
 
+  /**
+   * Inside the house and drafted, so nobody wanders out to haul. Drafted pawns do not eat, so a
+   * colonist who gets hungry during a long wait is let go to feed themselves; animals cannot open
+   * the door behind them.
+   */
+  async holdInside(able, snap) {
+    if (this.shelterSince == null) this.shelterSince = snap.tick ?? 0;
+    const waited = (snap.tick ?? 0) - this.shelterSince;
+    const inside = { x: this.base.x, z: this.base.z };
+    for (const c of able) {
+      if (dist(c, inside) > 2.5) {
+        const job = c.job?.def ?? "";
+        if (!this.evadeGoal.has(c.id) || !job.startsWith("Goto")) {
+          this.evadeGoal.set(c.id, inside);
+          await api.tryPost("/move", { pawn: c.id, x: inside.x, z: inside.z, draft: true });
+          this.stats.orders++;
+        }
+      } else if (c.drafted && (c.needs?.food ?? 1) < 0.25 && waited > 5000) {
+        await api.tryPost("/draft", { pawn: c.id, drafted: false });
+        await this.thought(`${c.name} has waited out the threat indoors long enough to get hungry; released to eat.`);
+      }
+    }
+  }
+
+  /**
+   * Engage the nearest threat with the attack the weapon in hand can actually make.
+   *
+   * RimWorld refuses a drafted ranged attack on a target out of range ("Out of range") rather
+   * than walking into range, and the journals show it: /attack refused three times in a row while
+   * a drifter walked up to a founder who never fired. A ranged colonist now walks to three
+   * quarters of its weapon's reach first, then shoots. Melee colonists close in with the attack.
+   */
+  async fight(able, threats, colonists) {
+    for (const c of able) {
+      const target = threats.slice().sort((a, b2) => dist(a, c) - dist(b2, c))[0];
+      if (!target) continue;
+      const w = c.weapon ? weaponInfo(c.weapon) : null;
+      const job = (c.job?.def ?? "").toLowerCase();
+      if (w?.ranged) {
+        const step = approachPoint(c, target, w.range ?? 22, this.mapSize ?? 250);
+        if (step) {
+          const prev = this.evadeGoal.get(c.id);
+          if (!prev || dist(prev, step) > 4 || !job.startsWith("goto")) {
+            this.evadeGoal.set(c.id, step);
+            await api.tryPost("/move", { pawn: c.id, x: step.x, z: step.z, draft: true });
+            this.stats.orders++;
+          }
+          continue;
+        }
+        this.evadeGoal.delete(c.id);
+      }
+      const last = this.lastAttackOrder.get(c.id) ?? -99;
+      if (job.includes("attack") && this.turn - last <= 8) continue;
+      const r = await api.tryPost("/attack", { pawn: c.id, target: target.id, draft: true });
+      if (!r && !w?.ranged) await api.tryPost("/job", { pawn: c.id, job: "AttackMelee", targetA: target.id });
+      this.lastAttackOrder.set(c.id, this.turn);
+      this.stats.orders++;
+    }
+    // Only pull a badly hurt colonist out if someone else is still holding the line.
+    for (const c of colonists) {
+      if (c.downed || (c.health?.pct ?? 1) > 0.3 || able.length <= 1) continue;
+      await api.tryPost("/move", { pawn: c.id, x: this.base.x, z: this.base.z, draft: true });
+    }
+  }
+
   async endCombat(colonists) {
-    this.fleeSet.clear();
     this.evadeGoal.clear();
+    this.shelterSince = null;
     this.journal("combat-end", {
       hurt: colonists.filter((c) => (c.health?.pct ?? 1) < 0.9).map((c) => ({ name: c.name, health: Math.round((c.health?.pct ?? 1) * 100) })),
     });
@@ -1052,16 +1272,129 @@ export class ColonyAgent {
     this.combatPosture = null;
     for (const c of colonists) {
       if (c.drafted) await api.tryPost("/draft", { pawn: c.id, drafted: false });
-      await api.tryPost("/pawn/settings", { pawn: c.id, hostility: "Attack", selfTend: true });
     }
+    // Hostility and self-tend are re-applied on the next peaceful turn by syncHostility, from
+    // whether each colonist is armed, rather than blanket-set here.
+    this.hostilitySet.clear();
     await api.tryPost("/speed", { speed: this.speed });
     await this.thought("Threat cleared. Back to work; wounds get tended first.");
     await this.narrate("combat-end", "threat cleared", `The fight is over. ${colonists.filter((c) => (c.health?.pct ?? 1) < 0.9).length} colonist(s) came out hurt. Undrafting and tending wounds.`, 30000);
   }
 
+  /**
+   * What an undrafted colonist does when a hostile turns up before the agent's next turn.
+   *
+   * RimWorld's default is Flee for everyone, and fleeing is what gets a founder bitten from
+   * behind by anything faster than a person. An armed colonist answers instead; an unarmed one
+   * keeps the default. Only sent when it changes.
+   */
+  async syncHostility(colonists) {
+    for (const c of colonists) {
+      if (c.downed || c.dead || c.drafted) continue;
+      const want = c.weapon ? "Attack" : "Flee";
+      if (this.hostilitySet.get(c.id) === want) continue;
+      const r = await api.tryPost("/pawn/settings", { pawn: c.id, hostility: want, selfTend: true });
+      if (r) this.hostilitySet.set(c.id, want);
+    }
+  }
+
+  // ---------------------------------------------------------------- the scripted first week
+
+  /**
+   * The storyteller's first week is a timetable, so meet it prepared. See INTRO_EVENTS in
+   * tactics.mjs for the schedule and where it was read from.
+   *
+   * What each appointment needs is known in advance and cheap: a weapon in hand for the mad
+   * animal on day 4, and a weapon plus a prisoner bed for the lone raider on day 6.
+   */
+  async prepareForScriptedThreats(colonists, snap, resources) {
+    const tick = snap.tick ?? 0;
+    const next = nextIntroEvent(tick, this.storyteller);
+    if (!next) return;
+    const until = next.tick - tick;
+
+    // Tell the stream a game-hour ahead. It is true, it is worth watching, and it lets chat see
+    // the colony getting ready for something everyone knows is coming.
+    if (until <= 2500 && !this.announcedIntro.has(next.tick)) {
+      this.announcedIntro.add(next.tick);
+      const when = tickToDayHour(next.tick).text;
+      this.journal("intro-event-due", { event: next.kind, at: next.tick }, snap);
+      await this.thought(`Within the hour (${when}) RimWorld's storyteller sends ${next.label}.`);
+      if (next.threat) {
+        await this.narrate(`intro-${next.kind}`, "scripted threat due",
+          `The storyteller's script sends ${next.label} at about ${when}. Armed colonists: ${colonists.filter((c) => c.weapon).length} of ${colonists.length}.`,
+          0, { priority: "high", askChat: true });
+      }
+    }
+    if (!next.threat) return;
+
+    // From day 3, an unarmed colony makes a weapon before anything else that can wait.
+    const unarmed = colonists.filter((c) => !c.downed && !c.weapon);
+    if (unarmed.length > 0 && until <= 90000 && this.every("intro-arm", 12)) {
+      await this.equipFoundWeapons(colonists);
+      if ((resources.WoodLog ?? 0) >= 30) {
+        await this.manageBills(resources);
+        if (!this.weaponRush) {
+          this.weaponRush = true;
+          await this.syncWorkPlan(colonists);
+          await this.thought(`${unarmed.length} of ${colonists.length} colonist(s) unarmed, ${Math.round(until / 2500)} hours before ${next.label}. A weapon now outranks building.`);
+        }
+      }
+    }
+    if (next.kind === "intro-raid" && until <= 60000) await this.ensurePrisonBed(snap, colonists);
+  }
+
+  /**
+   * Weapons the ideoligion can live with.
+   *
+   * The snapshot does not carry thoughts, so this reads the detailed pawn record every so often.
+   * When a colonist despises what they hold, the colony switches kind: the other recipe is queued
+   * and equipFoundWeapons swaps it in when it is made. See weaponPreferenceFromThoughts.
+   */
+  async adaptToIdeology(colonists) {
+    if (!this.every("ideology", 40)) return;
+    for (const c of colonists) {
+      if (!c.weapon || c.downed) continue;
+      let thoughts = [];
+      try { thoughts = (await api.get(`/pawn/${c.id}?detail=1`)).thoughts ?? []; } catch { continue; }
+      const pref = weaponPreferenceFromThoughts(thoughts, c.weapon);
+      if (!pref || pref === this.weaponPreference) continue;
+      this.weaponPreference = pref;
+      this.placed.delete(pref === "melee" ? "bill-club" : "bill-bow");
+      this.journal("ideology", { pawn: c.name, weapon: c.weapon, prefer: pref });
+      await this.thought(`${c.name}'s ideoligion despises the ${c.weapon}: "used" and "wielding" cost about ten mood a day between them. Switching the colony to ${pref} weapons.`);
+      await this.manageBills(this.lastCounted ?? {});
+    }
+  }
+
+  /** The moments that separate one run from the next. Each is recorded once, with its date. */
+  async trackMilestones(colonists, snap, threats) {
+    const tick = snap.tick ?? 0;
+    const up = colonists.filter((c) => !c.downed);
+    const built = this.builtDefs ?? new Set();
+    if (built.has("Campfire")) this.milestone("campfire", "campfire built: cooked food");
+    if (built.has("Bed") || built.has("DoubleBed")) this.milestone("bed", "a real bed");
+    if (this.shelter()?.usable) this.milestone("house", "the great hall stands: walls, doors and a roof");
+    const armed = colonists.find((c) => c.weapon);
+    if (armed) this.milestone("armed", `armed: ${armed.name} with a ${armed.weapon}`);
+    if (snap.research?.label) this.milestone("research", `first research project: ${snap.research.label}`);
+    for (const e of INTRO_EVENTS) {
+      if (e.threat && tick > e.tick + 12000 && up.length > 0 && threats.length === 0) {
+        this.milestone(`survived-${e.kind}`, `survived ${e.label}`);
+      }
+    }
+    for (const n of [2, 3, 5, 10, 20, 30, 40, 50]) {
+      if (colonists.length >= n) this.milestone(`pop-${n}`, n === 2 ? "a second colonist" : `${n} colonists`);
+    }
+    const day = Math.floor(tick / 60000) + 1;
+    for (const d of [7, 15, 30, 60, 120]) if (day >= d) this.milestone(`day-${d}`, `alive on day ${d}`);
+  }
+
   // ---------------------------------------------------------------- needs
 
   async manageNeeds(colonists, snap, resources) {
+    if (this.every("hostility", 10)) await this.syncHostility(colonists);
+    await this.adaptToIdeology(colonists);
     for (const c of colonists) {
       const n = c.needs ?? {};
       const food = n.food ?? 1, rest = n.rest ?? 1, mood = n.mood ?? 1, joy = n.joy ?? 1;
@@ -1071,7 +1404,8 @@ export class ColonyAgent {
 
       if (!this.configured.has(c.id)) {
         // Self-tend is not optional for a solo colony: without it one bleeding wound ends the run.
-        await api.tryPost("/pawn/settings", { pawn: c.id, selfTend: true, medicalCare: "Best", hostility: "Flee" });
+        // Hostility response is syncHostility's job: it depends on whether the pawn is armed.
+        await api.tryPost("/pawn/settings", { pawn: c.id, selfTend: true, medicalCare: "Best" });
         this.configured.add(c.id);
       }
 
@@ -1181,10 +1515,10 @@ export class ColonyAgent {
     const busyEating = /ingest|feedpatient/i.test(job);
     if (busyEating) return true;
     const idle = IDLE_JOBS.has(job) || job === "";
-    if (!idle && (c.needs?.food ?? 1) > 0.12) return false;
+    if (!idle && (c.needs?.food ?? 1) > 0.25) return false;
     if (!this.every(`eat-${c.id}`, 25)) return false;
-    const origin = this.base ?? c;
-    const r = 60;
+    const origin = c;
+    const r = 45;
     try {
       // Items first (harvested food), then plants. A colonist can eat straight off a berry bush,
       // and a founder starved to death next to 83 of them because this only looked at items.
@@ -1192,12 +1526,26 @@ export class ColonyAgent {
         api.get(`/things?cat=Item&detail=1&rect=${origin.x - r},${origin.z - r},${r * 2 + 1},${r * 2 + 1}&limit=300`).catch(() => ({})),
         api.get(`/things?cat=Plant&detail=1&rect=${origin.x - 45},${origin.z - 45},91,91&limit=400`).catch(() => ({})),
       ]);
+      // A raw corpse is the last resort, not a menu item. "Ate corpse" is minus twelve mood for
+      // days, and one founder ate raccoons and squirrels whole for a week while a butcher spot and
+      // a campfire stood unused, which put "Ate corpse" at the top of every mood ledger until the
+      // mental break that ended the run. Butchered and cooked, the same animal is a simple meal.
+      const desperate = (c.needs?.food ?? 1) < 0.12;
       const edible = [...(items.things ?? []), ...(plants.things ?? [])]
         .filter((t) => (t.nutrition ?? 0) > 0 && t.humanEdible !== false && t.x != null)
+        .filter((t) => desperate || !(t.corpse || /corpse|\(dead\)/i.test(`${t.def ?? ""} ${t.label ?? ""}`)))
         .sort((a, b) => {
-          // Prefer real food over grazing, then prefer whatever is closest.
-          const kind = (t) => (t.cat === "Plant" ? 1 : 0);
-          return (kind(a) - kind(b)) || (dist(a, c) - dist(b, c));
+          // A raw fungus next to the pawn is a poor choice when safe berries are a few
+          // steps away: food poisoning can cripple the only cook for an entire day.
+          const cost = (t) => {
+            const def = String(t.def ?? "");
+            const risk = /Meal|Pemmican|SurvivalPack/i.test(def) ? 0
+              : /RawBerries|Chocolate/i.test(def) ? 1
+              : /RawRice|RawPotato|RawCorn/i.test(def) ? 2
+              : /RawFungus|Meat_|Corpse/i.test(def) ? 5 : 3;
+            return risk * 20 + dist(t, c);
+          };
+          return cost(a) - cost(b);
         });
       let target = edible.find((t) => !t.forbidden);
       // Starving beats tidy. Crash debris, drop pods, corpses and anything outside the home area
@@ -1210,7 +1558,9 @@ export class ColonyAgent {
       }
       if (!target) return false;
       const edibleItem = target;
-      const ok = await api.tryPost("/job", { pawn: c.id, job: "Ingest", targetA: edibleItem.id, count: 1 });
+      const amount = Math.min(edibleItem.count ?? 1,
+        Math.max(1, Math.ceil((0.75 - (c.needs?.food ?? 0)) / Math.max(edibleItem.nutrition ?? 0.05, 0.05))));
+      const ok = await api.tryPost("/job", { pawn: c.id, job: "Ingest", targetA: edibleItem.id, count: amount });
       if (!ok) return false;
       this.stats.orders++;
       await this.thought(`${c.name} sent to eat ${edibleItem.label ?? edibleItem.def} at ${edibleItem.x}, ${edibleItem.z}: ${Math.round((c.needs?.food ?? 0) * 100)}% food and it was busy with something else.`);
@@ -1225,8 +1575,10 @@ export class ColonyAgent {
       // away exactly the good beds a colony upgrades to.
       const beds = await api.get("/things?cat=Building&player=1&def=Bed");
       const spots = await api.get("/things?cat=Building&player=1&def=SleepingSpot");
+      // Never a prisoner's bed: RimWorld refuses to lay a colonist in one, so the bed-rest order
+      // for a wounded founder would simply bounce.
       const all = [...(beds.things ?? []), ...(spots.things ?? [])]
-        .filter((t) => /bed|sleepingspot|bedroll/i.test(t.def ?? "") && !/animal/i.test(t.def ?? ""));
+        .filter((t) => /bed|sleepingspot|bedroll/i.test(t.def ?? "") && !/animal/i.test(t.def ?? "") && !t.forPrisoners);
       // Prefer a medical bed for someone who needs tending, then the nearest.
       all.sort((a, b) => {
         const med = (t) => (/hospital/i.test(t.def ?? "") || t.medical ? 0 : 1);
@@ -1254,7 +1606,7 @@ export class ColonyAgent {
 
     if (days < 3 || starving) {
       // Armed? Hunt. That is where the calories are. Foraging is the fallback, not the plan.
-      const armed = colonists.some((c) => c.weapon && !c.downed);
+      const armed = colonists.some((c) => this.isRanged(c) && !c.downed);
       if (armed) await this.huntSmallGame(colonists, resources, starving);
       await this.forage(colonists[0]);
       if (!armed) {
@@ -1271,7 +1623,8 @@ export class ColonyAgent {
       this.journal("food-emergency", { nutrition, hungriest: Math.round(hungriest * 100), days: Number(days.toFixed(2)) }, snap);
       await this.syncWorkPlan(colonists);
       await this.thought("Food emergency. Hunting, growing and cooking outrank every other job until we have a buffer.");
-    } else if (this.foodEmergency && days > 2.5) {
+    } else if (this.foodEmergency && (days > 2.5 || hungriest > 0.55)) {
+      // Fed counts as recovered. Stored food alone never cleared this on a naked start.
       this.foodEmergency = false;
       this.journal("food-recovered", { nutrition, days: Number(days.toFixed(2)) }, snap);
       await this.syncWorkPlan(colonists);
@@ -1327,7 +1680,10 @@ export class ColonyAgent {
         this.log(`No grown food plants on the map yet (${results.flatMap((r) => r.things ?? []).length} still growing).`);
         return;
       }
-      const take = bushes.slice(0, 25);
+      // A solo founder must return to build, eat and sleep. A board full of far-away bushes
+      // makes every plant work cycle a trip across the map.
+      const nearby = bushes.filter((t) => t.d <= 45);
+      const take = (nearby.length ? nearby : bushes).slice(0, cropsGrowing ? 5 : 10);
       const r = await api.tryPost("/designate", { type: "harvest", things: take.map((t) => t.id) });
       if (r && (r.designated ?? 0) > 0) {
         this.stats.orders++;
@@ -1351,6 +1707,13 @@ export class ColonyAgent {
     if (!starving) return false;
     if (!this.every("melee-hunt", 20)) return false;
     if (colonists.some((c) => c.weapon && !c.downed)) return false;     // a bow exists: hunt properly
+
+    // A rat can still scratch a barehanded founder badly enough to turn one hungry day into
+    // a fatal bleed. Gather reachable berries first, and equip a finished bow before hunting.
+    const nearby = await this.survey().catch(() => null);
+    if (nearby && ((nearby.wildFoodGrown ?? 0) > 0 ||
+        Object.values(nearby.food ?? {}).some((n) => n > 0) ||
+        (nearby.weaponsOnGround ?? []).some((w) => this.isRanged({ weapon: w.label ?? w.def })))) return false;
 
     const fighter = colonists.find((c) => !c.downed && !c.drafted &&
       (c.health?.pct ?? 1) > 0.75 && this.meleePower(c) >= 6);
@@ -1425,7 +1788,7 @@ export class ColonyAgent {
     // RimWorld will not assign a hunt job to a pawn without a ranged weapon, so designating
     // animals for an unarmed colony produces work nobody can take. One run stood idle at zero
     // percent food with eleven hunt designations on the board.
-    const hunter = colonists.find((c) => c.weapon && !c.downed);
+    const hunter = colonists.find((c) => this.isRanged(c) && !c.downed);
     if (!hunter) {
       if (starving && this.every("hunt-blocked", 40)) {
         this.log("Cannot hunt: nobody has a weapon, and RimWorld will not take a hunt job without one.");
@@ -1487,7 +1850,7 @@ export class ColonyAgent {
     } catch { return 0; }
   }
 
-  async manageWood(resources) {
+  async manageWood(resources, opts = {}) {
     const wood = resources.WoodLog ?? 0;
     const built = this.builtDefs ?? new Set();
 
@@ -1497,22 +1860,42 @@ export class ColonyAgent {
     // ledger while he sat at nineteen percent mood with no shelter. Twenty wood IS the food fix,
     // so the emergency only suspends chopping once the fire exists.
     const needsFire = !built.has("Campfire") && wood < 25;
-    if (this.foodEmergency && !needsFire) return;
+    // A food emergency no longer switches wood off outright. Once the flag was set it stayed set
+    // for the whole run (stored food never reached the bar that cleared it), so no tree was ever
+    // designated again, and any the human designated by hand got cancelled: "no matter how many
+    // times I tell it to get wood". Now a fed colonist with walls waiting for wood goes and gets
+    // it, and only a colonist actually close to collapse is kept off the trees.
+    const fed = (this.hungriest ?? 1) >= 0.35;
+    const wallsWaiting = (this.pendingBuilds ?? 0) > 0 || Boolean(this.roomInProgress);
+    if (this.foodEmergency && !needsFire && !(fed && wallsWaiting) && !opts.force) return;
 
     const need = this.woodNeeded(resources);
-    if (wood >= need) return;
+    if (wood >= need && !opts.force) return;
 
     // Count trees, not "plant work". Felling a tree and picking a berry are both HarvestPlant
     // designations, so a forager that had just marked twenty five bushes made this look like a
     // board full of queued wood work and wood cutting was never designated again. Across a whole
     // run the colony chopped nothing at all and held twelve wood on day three.
     const pending = await this.pendingTreeDesignations();
-    if (pending > 6) return;
+    // Trees already marked and still standing are the usual reason nothing arrives: too far, across
+    // water, or simply never reached. On a forced kick the agent's own marks are cancelled and the
+    // nearest trees to the colonist are marked instead; without a reachability answer from the
+    // bridge, rotating the targets is the one lever there is.
+    if (pending > 6) {
+      if (!opts.force) return;
+      const mine = [...(this.agentTrees ?? [])];
+      if (mine.length) {
+        await api.tryPost("/designate", { type: "cancel", things: mine });
+        this.agentTrees = new Set();
+        this.log(`${pending} tree(s) were already marked and not being cut; cancelled the agent's ${mine.length} and marking nearer ones.`);
+      }
+    }
+    this.pendingTrees = pending;
 
     // About 20 wood per tree, so ask for the shortfall and nothing more.
     const shortfall = need - wood;
     const wanted = Math.min(12, Math.max(2, Math.ceil(shortfall / 20)));
-    const b = this.base;
+    const b = opts.near ?? this.base;
     try {
       const treeDefs = ["Plant_TreeOak", "Plant_TreePoplar", "Plant_TreePine", "Plant_TreeBirch", "Plant_TreeWillow", "Plant_TreeMaple"];
       const pages = await Promise.all(treeDefs.map((d) =>
@@ -1527,6 +1910,8 @@ export class ColonyAgent {
       const r = await api.tryPost("/designate", { type: "chop", things: trees.map((t) => t.id) });
       if (r && (r.designated ?? 0) > 0) {
         this.stats.orders++;
+        this.lastWoodOrderTurn = this.turn;
+        for (const t of trees) (this.agentTrees ?? (this.agentTrees = new Set())).add(t.id);
         this.log(`Designated ${r.designated} tree(s) for ${need} wood (have ${wood}, need it for: ${this.woodReason}).`);
       }
     } catch {}
@@ -1546,19 +1931,26 @@ export class ColonyAgent {
     const built = this.builtDefs ?? new Set();
     if (!built.has("Campfire")) { this.woodReason = "a campfire"; return 20; }
     if (!this.hasAnyBed(built)) { this.woodReason = "a bed"; return 45; }
+    // What is actually on the board, not a fixed ladder. The ladder asked for "the first bedroom"
+    // while five unpaid rooms stood as blueprints, and it never asked for the wood those needed.
+    if (this.roomInProgress) {
+      this.woodReason = `finishing the ${this.roomInProgress} (${this.roomWoodShortfall ?? 0} wood of walls and doors still to pay for)`;
+      return Math.max(30, (this.roomWoodShortfall ?? 0) + 25);
+    }
     if (!this.placed.has("room-hall")) { this.woodReason = "the great hall: twenty walls and four doors"; return 215; }
-    if (!this.placed.has("room-bed1")) { this.woodReason = "the first bedroom"; return 160; }
-    if (!this.placed.has("room-warehouse")) { this.woodReason = "the warehouse"; return 160; }
-    if (!this.placed.has("room-kitchen")) { this.woodReason = "the kitchen"; return 160; }
-    if (!this.placed.has("room-freezer")) { this.woodReason = "the cold room"; return 140; }
-    if (!this.placed.has("room-workshop")) { this.woodReason = "the workshop"; return 140; }
-    this.woodReason = "the next bedroom, furniture and repairs";
-    return 220;
+    const next = this.roomPlan(this.lastKnownPopulation ?? 1).find((rm) => !this.placed.has(`room-${rm.key}`) && !rm.prison);
+    if (next) {
+      const cost = this.roomCost?.get(next.key) ?? 160;
+      this.woodReason = `the ${next.label.toLowerCase()}, about ${cost} wood`;
+      return cost + 15;
+    }
+    this.woodReason = "furniture and repairs";
+    return 120;
   }
 
   async manageSteel(resources, colonists = [], day = 1) {
     if ((resources.Steel ?? 0) >= 60) return;
-    if (!this.placed.has("hut") || (colonists.length < 2 && day < 8)) return;
+    if (!this.placed.has("room-hall") || (colonists.length < 2 && day < 8)) return;
     try {
       const b = this.base;
       const res = await api.get(`/things?def=MineableSteel&rect=${b.x - 45},${b.z - 45},91,91&limit=200`);
@@ -1725,10 +2117,6 @@ export class ColonyAgent {
       R("hall", "Great hall", "dining and recreation", -3, -3, 3, 3,
         [[0, -3], [0, 3], [3, 0], [-3, 0]], { first: true }),
 
-      // The founder stops sleeping in the dining room. A 4x4 bedroom is large enough to stop
-      // counting as cramped, and an owned bedroom is worth real mood every single night.
-      R("bed1", "Bedroom 1", "sleeping", -6, 3, -1, 8, [[-1, 5]], { bedroom: true, cap: [0, 8] }),
-
       // Goods and supplies out of the weather, one room from the front door.
       R("warehouse", "Warehouse", "goods, supplies, materials", -3, -9, 3, -3, [[0, -9]]),
 
@@ -1740,24 +2128,39 @@ export class ColonyAgent {
 
       R("workshop", "Workshop", "crafting, smithing, tailoring", -9, -3, -3, 3, [[-9, 0]]),
 
-      R("bed2", "Bedroom 2", "sleeping", 1, 3, 6, 8, [[1, 5]], { bedroom: true, cap: [0, 8] }),
-      R("bed3", "Bedroom 3", "sleeping", -6, 8, -1, 13, [[-1, 10]], { bedroom: true, cap: [0, 13] }),
-      R("bed4", "Bedroom 4", "sleeping", 1, 8, 6, 13, [[1, 10]], { bedroom: true, cap: [0, 13] }),
-
       R("hospital", "Hospital", "medical beds", -6, 13, -1, 18, [[-1, 15]], { cap: [0, 18] }),
       R("research", "Research room", "research bench", 1, 13, 6, 18, [[1, 15]], { cap: [0, 18] }),
-
-      R("bed5", "Bedroom 5", "sleeping", -6, 18, -1, 23, [[-1, 20]], { bedroom: true, cap: [0, 23] }),
-      R("bed6", "Bedroom 6", "sleeping", 1, 18, 6, 23, [[1, 20]], { bedroom: true, cap: [0, 23] }),
-      R("bed7", "Bedroom 7", "sleeping", -6, 23, -1, 28, [[-1, 25]], { bedroom: true, cap: [0, 28] }),
-      R("bed8", "Bedroom 8", "sleeping", 1, 23, 6, 28, [[1, 25]], { bedroom: true, cap: [0, 28] }),
 
       // Detached on purpose. A prison break should not open into the corridor the colony sleeps on.
       R("prison", "Prison", "prisoners", 9, -13, 15, -7, [[12, -13]], { prison: true }),
     ];
 
-    // Only ever plan bedrooms the colony has people for, plus one spare for the next arrival.
-    return rooms.filter((r) => !r.bedroom || Number(r.key.replace("bed", "")) <= population + 1);
+    // Dynamic bedroom generation up to POPULATION_TARGET (50 colonists).
+    // Paired 5x5 rooms along the north corridor, skipping hospital/research at z=13..18.
+    for (let i = 1; i <= POPULATION_TARGET; i += 2) {
+      const pairIndex = Math.floor(i / 2); // 0, 1, 2, ...
+      const zOffset = pairIndex >= 2 ? (pairIndex + 1) * 5 + 3 : pairIndex * 5 + 3;
+      const z0 = zOffset;
+      const z1 = z0 + 5;
+      const doorZ = z0 + 2;
+
+      rooms.push(R(`bed${i}`, `Bedroom ${i}`, "sleeping", -6, z0, -1, z1, [[-1, doorZ]], { bedroom: true, cap: [0, z1] }));
+      if (i + 1 <= POPULATION_TARGET) {
+        rooms.push(R(`bed${i + 1}`, `Bedroom ${i + 1}`, "sleeping", 1, z0, 6, z1, [[1, doorZ]], { bedroom: true, cap: [0, z1] }));
+      }
+    }
+
+    // Only ever plan bedrooms the colony has people for, plus one spare for the next arrival, and
+    // build them right after the hall: a bedroom is mood every night, and it used to sit eighth in
+    // the order, behind a hospital and a research room a colony of one has no use for yet.
+    const bedNo = (r) => Number(r.key.replace("bed", ""));
+    const wanted = rooms.filter((r) => !r.bedroom || bedNo(r) <= population + 1);
+    return [
+      ...wanted.filter((r) => r.first),
+      ...wanted.filter((r) => r.bedroom && bedNo(r) <= population),
+      ...wanted.filter((r) => !r.first && !r.bedroom),
+      ...wanted.filter((r) => r.bedroom && bedNo(r) > population),
+    ];
   }
 
   /** Every cell along a rect's perimeter, corners included, once each. */
@@ -1778,17 +2181,31 @@ export class ColonyAgent {
   async occupancy() {
     const b = this.base;
     const held = new Map();
+    // Two filtered queries, never one unfiltered one. An unfiltered listing of a 53x120 forest
+    // rect returns every tree, berry bush and rock cell (natural rock is category Building), and
+    // the page limit was reached before the blueprints, which spawn last. So `held` came back
+    // with no blueprints in it, "outstanding" read zero, and one more room was laid out on every
+    // build pass: five rooms in thirty seconds on three hundred wood, none of them ever closed.
+    const rect = `${b.x - 26},${b.z - 26},53,120`;
     try {
-      const res = await api.get(`/things?rect=${b.x - 26},${b.z - 26},53,60&limit=900`);
-      for (const t of res.things ?? []) {
+      const [pending, built] = await Promise.all([
+        api.get(`/things?cat=Ethereal&rect=${rect}&limit=500`).catch(() => ({})),
+        api.get(`/things?cat=Building&player=1&rect=${rect}&limit=500`).catch(() => ({})),
+      ]);
+      for (const t of built.things ?? []) {
+        if (t.x == null) continue;
+        held.set(`${t.x},${t.z}`, { def: String(t.def ?? ""), pending: false });
+      }
+      for (const t of pending.things ?? []) {
         const def = String(t.def ?? "");
-        const isBuilding = String(t.cat ?? "") === "Building";
-        const pending = /^(Blueprint|Frame)_/i.test(def);
-        if (!isBuilding && !pending) continue;
-        const clean = def.replace(/^(Blueprint|Frame)_/i, "");
-        held.set(`${t.x},${t.z}`, { def: clean, pending });
+        if (t.x == null || !/^(Blueprint|Frame)_/i.test(def)) continue;
+        held.set(`${t.x},${t.z}`, { def: def.replace(/^(Blueprint|Frame)_/i, ""), pending: true });
       }
     } catch {}
+    // Natural rock and anything else the game refused to build over is a wall as far as a room is
+    // concerned. Learned from /build's own refusals; see buildRoom.
+    for (const [key, what] of this.roomObstacles ?? []) if (!held.has(key)) held.set(key, { def: what, pending: false, obstacle: true });
+    this.lastHeld = held;
     return held;
   }
 
@@ -1850,8 +2267,42 @@ export class ColonyAgent {
     return walls * 5 + doorCount * 25;
   }
 
+  /** Every cell a room needs, cap included: the perimeter plus the corridor cap door. */
+  roomCells(room) {
+    const cells = ColonyAgent.perimeter(room).map(([x, z]) => ({ x, z, key: `${x},${z}` }));
+    if (room.cap) {
+      const x = this.base.x + room.cap[0], z = this.base.z + room.cap[1];
+      cells.push({ x, z, key: `${x},${z}`, cap: true });
+    }
+    return cells;
+  }
+
+  /** Walls and doors of a room that are neither built nor ordered, and what is still being built. */
+  roomState(room, held) {
+    const doors = new Set(room.doors.map((d) => `${d.x},${d.z}`));
+    const missing = [], pending = [];
+    for (const c of this.roomCells(room)) {
+      const there = held.get(c.key);
+      if (!there) missing.push({ ...c, door: c.cap || doors.has(c.key) });
+      else if (there.pending) pending.push(c);
+    }
+    return { missing, pending, complete: missing.length === 0 && pending.length === 0 };
+  }
+
+  /**
+   * Lay out a room, or finish laying one out.
+   *
+   * A room used to be marked placed once sixty percent of its blueprints landed, and never looked
+   * at again, so the cells that did not land stayed open and the room never closed: no roof, no
+   * temperature, and none of the mood it was built for. Now a room is remembered as in progress
+   * from its first blueprint until every cell is built, every build pass re-places whatever is
+   * still missing, and a cell the game refuses as occupied (natural rock, mostly) is recorded as
+   * a wall in its own right rather than retried forever.
+   */
   async buildRoom(room, wood, held) {
-    if (this.placed.has(`room-${room.key}`)) return "already";
+    const started = this.placed.has(`room-${room.key}`);
+    const inProgress = this.roomInProgress === room.key;
+    if (started && !inProgress) return "already";
     await this.clearZoneFor(room);
 
     const doors = new Map(room.doors.map((d) => [`${d.x},${d.z}`, d]));
@@ -1886,6 +2337,7 @@ export class ColonyAgent {
     // door costs a colonist-hour and the room still works; the plan puts doors in from the start.
     if (items.length === 0) {
       this.placed.set(`room-${room.key}`, { def: "Room", x: room.x0, z: room.z0 });
+      if (!inProgress) this.roomInProgress = room.key;   // ordered in full; wait for the walls to go up
       return "already";
     }
 
@@ -1893,16 +2345,41 @@ export class ColonyAgent {
     const doorCount = items.length - wallCount;
     const cost = wallCount * 5 + doorCount * 25;
     (this.roomCost ?? (this.roomCost = new Map())).set(room.key, cost);
-    if (wood < cost + 15) return { short: cost + 15 - wood, cost };
+    // The wood rule applies to starting a room, never to finishing one already started.
+    if (!started) {
+      const minStart = room.first ? Math.min(cost, 35) : cost + 15;
+      if (wood < minStart) return { short: cost + 15 - wood, cost };
+    }
 
     const r = await api.tryPost("/build/bulk", { items });
-    const landed = (r?.results ?? []).filter((x) => x && x.ok !== false).length;
-    if (!r || landed < Math.ceil(items.length * 0.6)) {
-      this.log(`${room.label}: only ${landed} of ${items.length} blueprints landed, will retry.`);
-      return false;
+    const results = r?.results ?? [];
+    let landed = 0;
+    for (let i = 0; i < items.length; i++) {
+      const res = results[i];
+      if (res && res.ok !== false) { landed++; continue; }
+      const why = String(res?.error ?? "");
+      // "Space already occupied" is the game telling us something solid stands there. Natural
+      // rock is the usual reason, and rock is a better wall than wood, so the cell is a wall now.
+      if (/occupied|identical/i.test(why)) {
+        (this.roomObstacles ?? (this.roomObstacles = new Map())).set(`${items[i].x},${items[i].z}`, "Obstacle");
+        held.set(`${items[i].x},${items[i].z}`, { def: "Obstacle", pending: false, obstacle: true });
+      }
+      if (this.every(`room-refused-${room.key}-${items[i].x},${items[i].z}`, 60)) {
+        this.log(`${room.label}: ${items[i].def} at (${items[i].x}, ${items[i].z}) refused: ${why || "no reason given"}`);
+      }
+    }
+    if (!r || landed === 0) {
+      if (!started) return false;
+      return "retry";
+    }
+    this.stats.orders++;
+    if (started) {
+      this.log(`${room.label}: ${landed} missing wall(s) or door(s) re-ordered.`);
+      return "placed";
     }
     this.placed.set(`room-${room.key}`, { def: "Room", x: room.x0, z: room.z0 });
-    this.stats.orders++;
+    this.roomInProgress = room.key;
+    if (room.first) this.hallPlacedTick = this.lastTick ?? 0;
     await this.thought(`${room.label} laid out for ${room.purpose}: ${landed} new walls and doors, ${standingWalls} already shared with the rooms beside it, about ${cost} wood.`);
     await this.narrate("room-" + room.key, `${room.label} started`,
       `${room.label} blueprinted off the great hall for ${room.purpose}. ${landed} new cells, ${standingWalls} walls shared with neighbouring rooms, roughly ${cost} of the ${wood} wood in store.`,
@@ -1958,6 +2435,23 @@ export class ColonyAgent {
   };
 
   /**
+   * Return furniture definitions for any planned room, dynamically generating
+   * wooden bed placements for bedrooms up to 50 colonists.
+   */
+  furnitureForRoom(roomKey) {
+    if (ColonyAgent.FURNITURE[roomKey]) return ColonyAgent.FURNITURE[roomKey];
+    const match = roomKey.match(/^bed(\d+)$/);
+    if (!match) return [];
+    const num = parseInt(match[1], 10);
+    const isWest = num % 2 === 1;
+    const pairIndex = Math.floor((num - 1) / 2);
+    const zOffset = pairIndex >= 2 ? (pairIndex + 1) * 5 + 3 : pairIndex * 5 + 3;
+    const bedX = isWest ? -4 : 3;
+    const bedZ = zOffset + 3;
+    return [{ key: `bed${num}`, def: "Bed", x: bedX, z: bedZ, rot: 0, stuff: "WoodLog", wood: 45 }];
+  }
+
+  /**
    * What the colony actually has, not just what it has tidied away.
    *
    * /resources reports stockpiled material. Anything lying where it fell does not count, and a
@@ -1972,6 +2466,13 @@ export class ColonyAgent {
    */
   async trueResources(snap) {
     const stockpiled = { ...(snap.resources ?? {}) };
+    // Ten map scans a turn, at a turn a second, against a game thread that gives the bridge twelve
+    // milliseconds a frame: this was most of the bridge's load, and the timeouts in the journals.
+    // The count changes by a log or two between turns; every fourth turn is plenty.
+    if (this.lastCounted && this.turn - (this.lastCountedTurn ?? -99) < 4 && this.base) {
+      return { ...stockpiled, ...this.lastCounted };
+    }
+    this.lastCountedTurn = this.turn;
     const counted = { ...stockpiled };
     try {
       const defs = ["WoodLog", "Steel", "Cloth", "Silver", "ComponentIndustrial",
@@ -2025,8 +2526,10 @@ export class ColonyAgent {
     // has been filed into a stockpile.
     const daysFood = this.foodDays ?? 0;
     const cropDays = this.cropDays ?? 0;
-    if (daysFood >= 2 || cropDays >= 2) {
+    if (daysFood >= 2) {
       add("Food secured", "done", `${daysFood.toFixed(1)}d stored${cropDays > 0.1 ? ` +${cropDays.toFixed(1)}d growing` : ""}`);
+    } else if (cropDays >= 2) {
+      add("Get food", "doing", `${daysFood.toFixed(1)}d stored +${cropDays.toFixed(1)}d growing; crops are not edible yet`);
     } else if (survey && (survey.wildFoodGrown > 0 || (survey.game ?? []).some((g) => g.safeToHuntBarehanded))) {
       add("Get food", "doing", `${survey.wildFoodGrown} bushes, ${(survey.game ?? []).filter((g) => g.safeToHuntBarehanded).length} small game`);
     } else {
@@ -2070,6 +2573,16 @@ export class ColonyAgent {
     const corpseCount = Object.values(survey?.corpses ?? {}).reduce((a, b) => a + b, 0);
     if (corpseCount > 0) add("Clear bodies", "doing", `${corpseCount} waiting`);
 
+    // The storyteller's next scripted appointment, with whether the colony is ready for it. It is
+    // the one thing on the board the colony knows is coming, so the stream should see it too.
+    const next = nextIntroEvent(snap.tick ?? 0, this.storyteller);
+    if (next?.threat) {
+      const armedCount = colonists.filter((c) => c.weapon).length;
+      const ready = armedCount === colonists.length;
+      add(`${tickToDayHour(next.tick).text}: ${next.kind === "intro-raid" ? "first raid" : "first threat"}`,
+          ready ? "queued" : "doing", `${armedCount}/${colonists.length} armed`);
+    }
+
     const goal = `${colonists.length} of ${POPULATION_TARGET} colonists`;
     const day = snap.dateString ? String(snap.dateString).slice(0, 26) : `Day ${snap.day ?? "?"}`;
 
@@ -2079,7 +2592,7 @@ export class ColonyAgent {
     this.journal("plan", { reason, goal, blocker, tasks }, snap);
 
     const shown = tasks.map((t) => `${t.state === "done" ? "done" : t.state}: ${t.label}${t.note ? ` (${t.note})` : ""}`).join("; ");
-    this.log(`Plan (${reason}) — ${goal}. ${shown}${blocker ? ` | waiting on: ${blocker}` : ""}`);
+    this.log(`Plan (${reason}): ${goal}. ${shown}${blocker ? ` | waiting on: ${blocker}` : ""}`);
     return this.plan;
   }
 
@@ -2161,6 +2674,14 @@ export class ColonyAgent {
       await this.place("bed", "Bed", b.x - 1, b.z - 1, { stuff: "WoodLog", rot: 0, force: true });
     }
 
+    // Dubs Bad Hygiene sanitation: latrine and wash bucket prevent bladder breaks and severe mood loss.
+    if (!built.has("PitLatrine") && !built.has("Frame_PitLatrine") && !built.has("Blueprint_PitLatrine")) {
+      await this.place("latrine", "PitLatrine", b.x + 4, b.z - 1, { stuff: "WoodLog", force: true });
+    }
+    if (!built.has("WashBucket") && !built.has("Frame_WashBucket") && !built.has("Blueprint_WashBucket")) {
+      await this.place("washbucket", "WashBucket", b.x + 5, b.z - 1, { stuff: "WoodLog", force: true });
+    }
+
     // Rooms, in the order a colony actually needs them. Each one waits until the colony can pay
     // for the whole thing, so nothing is ever left as an unclosed rectangle.
     // Ordered, not finished. The campfire and the bed only have to be on the board before the
@@ -2181,12 +2702,35 @@ export class ColonyAgent {
       // rule existed to prevent. So nothing new is ordered while anything already ordered is
       // still standing as a blueprint or a frame.
       const outstanding = [...held.values()].filter((v) => v.pending).length;
-    this.pendingBuilds = outstanding;
-      if (outstanding > 0) {
-        if (this.every("room-wip", 40)) this.log(`${outstanding} wall or door still unbuilt; not starting another room until they are up.`);
+      this.pendingBuilds = outstanding;
+
+      // The room in progress comes first: whatever of it is still missing gets ordered again,
+      // and it is only finished when nothing on its perimeter is missing or still being built.
+      const plan = this.roomPlan(colonists.length);
+      if (this.roomInProgress) {
+        const room = plan.find((rm) => rm.key === this.roomInProgress);
+        if (!room) this.roomInProgress = null;
+        else {
+          const state = this.roomState(room, held);
+          if (state.missing.length > 0) await this.buildRoom(room, wood, held);
+          else if (state.complete) {
+            this.roomInProgress = null;
+            this.journal("room-complete", { room: room.key }, null);
+            await this.thought(`${room.label} is closed: every wall and door stands.`);
+            if (room.first) this.hallStands = true;
+          }
+        }
+      }
+      const wip = this.roomInProgress ? plan.find((rm) => rm.key === this.roomInProgress) : null;
+      const wipState = wip ? this.roomState(wip, held) : null;
+      this.roomWoodShortfall = wipState
+        ? wipState.missing.reduce((a, c) => a + (c.door ? 25 : 5), 0) + wipState.pending.length * 5
+        : 0;
+
+      if (outstanding > 0 || this.roomInProgress) {
+        if (this.every("room-wip", 40)) this.log(`${outstanding} wall or door still unbuilt${wip ? ` (${wip.label} in progress)` : ""}; not starting another room until they are up.`);
       } else {
 
-      const plan = this.roomPlan(colonists.length);
       for (const room of plan) {
         if (room.prison && (colonists.length < 2 || !this.placed.has("room-hall"))) continue;
         if (!room.first && !this.placed.has("room-hall")) continue;
@@ -2202,8 +2746,10 @@ export class ColonyAgent {
 
     // Furniture, but only into rooms that exist. A bed blueprinted where a bedroom has not been
     // built yet is a bed standing in a field.
-    for (const [roomKey, items] of Object.entries(ColonyAgent.FURNITURE)) {
-      if (!this.placed.has(`room-${roomKey}`)) continue;
+    const planRooms = this.roomPlan(colonists.length);
+    for (const room of planRooms) {
+      if (!this.placed.has(`room-${room.key}`)) continue;
+      const items = this.furnitureForRoom(room.key);
       for (const it of items) {
         if (it.needPop && colonists.length < it.needPop) continue;
         if (it.wood && wood < it.wood) continue;
@@ -2222,9 +2768,9 @@ export class ColonyAgent {
     // Traps sit south of the warehouse door, off the path anyone walks, once there is something
     // behind them worth defending.
     if (wood >= 150 && this.placed.has("room-warehouse")) {
-      const trapCoords = [[-4, -11], [4, -11], [-2, -13], [2, -13], [-6, -9], [6, -9]];
-      for (let i = 0; i < trapCoords.length; i++) {
-        await this.place(`trap-${i}`, "TrapSpike", b.x + trapCoords[i][0], b.z + trapCoords[i][1], { stuff: "WoodLog", exact: true });
+      for (let i = 0; i < ColonyAgent.TRAP_CELLS.length; i++) {
+        const [dx, dz] = ColonyAgent.TRAP_CELLS[i];
+        await this.place(`trap-${i}`, "TrapSpike", b.x + dx, b.z + dz, { stuff: "WoodLog", exact: true });
       }
     }
 
@@ -2232,15 +2778,16 @@ export class ColonyAgent {
     await this.manageFarms(colonists.length);
   }
 
+  /**
+   * Prisoners: somewhere to hold them, and recruit mode once they are held.
+   *
+   * The capture half of this never ran. It collected the downed hostiles and then ordered the
+   * capture of `target`, a variable that did not exist, so it threw, the empty catch swallowed
+   * it, and not one prisoner was ever taken. It also looked for the prison bed ten cells east of
+   * the base while the plan puts it at (12, -10). Capturing now lives in captureDowned alone.
+   */
   async managePrisoners(colonists, snap) {
-    try {
-      const beds = await api.get("/things?cat=Building&player=1&def=Bed");
-      const pBed = (beds.things ?? []).find(t => dist(t, { x: this.base.x + 10, z: this.base.z }) < 4);
-      if (pBed && !pBed.forPrisoners) {
-        await api.tryPost("/bed/settings", { thing: pBed.id, forPrisoners: true });
-      }
-    } catch {}
-
+    await this.ensurePrisonBed(snap, colonists);
     try {
       const prisoners = await api.get("/pawns?role=prisoner");
       for (const p of prisoners.pawns ?? []) {
@@ -2251,23 +2798,44 @@ export class ColonyAgent {
         }
       }
     } catch {}
+  }
 
-    const doctor = colonists.find(c => !c.downed && !c.drafted);
-    if (doctor) {
-      try {
-        const downedHostiles = (snap.hostiles ?? []).filter(h => h.downed && !h.dead && (h.role === "enemy" || h.kind?.includes("colonist") || h.kind?.includes("tribal") || h.kind?.includes("pirate") || h.kind?.includes("raider")));
-        if (downedHostiles.length > 0) {
-          const target = downedHostiles[0];
-          const beds = await api.get("/things?cat=Building&player=1&def=Bed");
-          const pBed = (beds.things ?? []).find(t => t.forPrisoners) ?? (beds.things ?? [])[0];
-          if (pBed) {
-            await api.tryPost("/job", { pawn: doctor.id, job: "Capture", targetA: target.id, targetB: pBed.id });
-            await this.thought(`Capturing downed enemy ${target.name ?? target.id} for recruitment.`);
-            await this.narrate("capture", "taking a prisoner", `${target.name ?? "A downed hostile"} is being carried to a prison bed to be tended and recruited.`, 60000, { priority: "high", askChat: true });
-          }
-        }
-      } catch {}
-    }
+  /** Every bed and sleeping spot the colony owns, prisoner or not. */
+  async sleepingPlaces() {
+    const [beds, spots] = await Promise.all([
+      api.get("/things?cat=Building&player=1&def=Bed").catch(() => ({})),
+      api.get("/things?cat=Building&player=1&def=SleepingSpot").catch(() => ({})),
+    ]);
+    return [...(beds.things ?? []), ...(spots.things ?? [])]
+      .filter((t) => t.x != null && /bed|sleepingspot|bedroll/i.test(t.def ?? "") && !/animal/i.test(t.def ?? ""));
+  }
+
+  /**
+   * A place to hold a prisoner, standing before the day-6 raid arrives.
+   *
+   * The storyteller's scripted day-6 raid forces one raider to be downed rather than killed. With
+   * a prisoner bed he is the colony's second colonist; without one he bleeds out on the grass.
+   * A sleeping spot costs nothing and takes no work. It goes where the prison room's bed will
+   * stand, and it is never a colonist's own bed: the old bed logic marked "the furthest bed" as the
+   * prison bed, which for a colony of one is the founder's only bed.
+   */
+  async ensurePrisonBed(snap, colonists = []) {
+    const tick = snap?.tick ?? 0;
+    const downedHostile = (snap?.hostiles ?? []).some((h) => h.downed && !h.dead && isHumanlikeThreat(h));
+    if (tick < 250000 && !downedHostile) return;
+    try {
+      const places = await this.sleepingPlaces();
+      if (places.some((t) => t.forPrisoners)) return;
+      const b = this.base;
+      const cell = { x: b.x + 12, z: b.z - 10 };
+      const here = places.find((t) => dist(t, cell) < 3);
+      if (here) {
+        const r = await api.tryPost("/bed/settings", { thing: here.id, forPrisoners: true });
+        if (r) await this.thought(`Prisoner bed ready at ${here.x}, ${here.z}. RimWorld's day-6 raider is downed rather than killed; he can be the next colonist.`);
+        return;
+      }
+      await this.place("prison-spot", "SleepingSpot", cell.x, cell.z, { force: true, allowDuplicate: true });
+    } catch {}
   }
 
   /**
@@ -2281,8 +2849,8 @@ export class ColonyAgent {
    * cannot make the bow. Both beat bare fists, which do 4.1 DPS against a knife's 7.02.
    */
   static WEAPON_RECIPES = [
-    { recipe: "Make_Bow_Short", key: "bill-bow", wood: 30, minCrafting: 2, label: "short bow", note: "reach, and the only way to hunt at all" },
-    { recipe: "Make_MeleeWeapon_Club", key: "bill-club", wood: 40, minCrafting: 0, label: "club", note: "no skill needed, and far better than fists" },
+    { recipe: "Make_Bow_Short", key: "bill-bow", wood: 30, minCrafting: 2, label: "short bow", ranged: true, note: "reach, and the only way to hunt at all" },
+    { recipe: "Make_MeleeWeapon_Club", key: "bill-club", wood: 40, minCrafting: 0, label: "club", ranged: false, note: "no skill needed, and far better than fists" },
   ];
 
   /**
@@ -2314,6 +2882,8 @@ export class ColonyAgent {
           return typeof v === "number" ? v : parseInt(String(v ?? "0"), 10) || 0;
         }));
         for (const w of ColonyAgent.WEAPON_RECIPES) {
+          // The ideoligion's view of the weapon comes first; see adaptToIdeology.
+          if (this.weaponPreference && (this.weaponPreference === "ranged") !== w.ranged) continue;
           if (this.placed.has(w.key) || bills.includes(w.label)) continue;
           if (wood < w.wood) continue;
           if (crafting < w.minCrafting) continue;   // nobody here can make it
@@ -2378,8 +2948,12 @@ export class ColonyAgent {
    */
   async equipFoundWeapons(colonists) {
     if (!this.every("scavenge-weapons", 25)) return;
-    const unarmed = colonists.filter((c) => !c.weapon && !c.downed && !c.dead);
-    if (unarmed.length === 0) return;
+    // Unarmed, or holding the kind of weapon the ideoligion despises. The snapshot carries no
+    // thoughts, so the despised check used to read an empty list and never swapped anything.
+    const wrongKind = (c) => this.weaponPreference && c.weapon &&
+      (this.weaponPreference === "ranged") !== this.isRanged(c);
+    const candidates = colonists.filter((c) => !c.downed && !c.dead && (!c.weapon || wrongKind(c)));
+    if (candidates.length === 0) return;
 
     try {
       const res = await api.get(`/things?cat=Item&detail=1&rect=${this.base.x - 40},${this.base.z - 40},81,81&limit=300`);
@@ -2387,18 +2961,32 @@ export class ColonyAgent {
         .filter((t) => t.weapon && t.x != null && !t.forbidden)
         // A wooden log is flagged IsWeapon by the game. Anything that is also stuff is material.
         .filter((t) => !/Log|Block|Chunk|Steel|Cloth|Leather/i.test(String(t.def)))
-        .map((t) => ({ ...t, ranged: /bow|gun|rifle|pistol|revolver|shotgun|launcher|bolt/i.test(`${t.def} ${t.label}`) }))
-        .sort((a, b) => (b.ranged - a.ranged) || (dist(a, this.base) - dist(b, this.base)));
+        .map((t) => ({ ...t, ranged: /bow|gun|rifle|pistol|revolver|shotgun|launcher|bolt/i.test(`${t.def} ${t.label}`) }));
       if (weapons.length === 0) return;
 
-      for (const c of unarmed) {
-        const w = weapons.shift();
-        if (!w) break;
+      for (const c of candidates) {
+        const meleeSkill = typeof c.skills?.Melee === "number" ? c.skills.Melee : parseInt(String(c.skills?.Melee ?? "0"), 10) || 0;
+        const shootSkill = typeof c.skills?.Shooting === "number" ? c.skills.Shooting : parseInt(String(c.skills?.Shooting ?? "0"), 10) || 0;
+        const prefersMelee = this.weaponPreference
+          ? this.weaponPreference === "melee"
+          : meleeSkill > shootSkill + 2 || (c.traits ?? []).includes("Brawler");
+
+        // Sort available weapons matching colonist's preference
+        const pool = prefersMelee ? weapons.filter((w) => !w.ranged)
+          : this.weaponPreference === "ranged" ? weapons.filter((w) => w.ranged) : weapons;
+        const pickPool = pool.length > 0 ? pool : (c.weapon ? [] : weapons);
+        if (pickPool.length === 0) continue;
+
+        pickPool.sort((a, b) => dist(a, this.base) - dist(b, this.base));
+        const w = pickPool[0];
+        const idx = weapons.indexOf(w);
+        if (idx >= 0) weapons.splice(idx, 1);
+
         await api.tryPost("/allow", { things: [w.id] });
         const r = await api.tryPost("/job", { pawn: c.id, job: "Equip", targetA: w.id });
         if (r) {
           this.stats.orders++;
-          await this.thought(`${c.name} is picking up a ${w.label} lying at ${w.x}, ${w.z}. ${w.ranged ? "A ranged weapon is what makes hunting possible at all." : "Better than bare hands."} Free, and already made.`);
+          await this.thought(`${c.name} is equipping a ${w.label} lying at ${w.x}, ${w.z}. ${w.ranged ? "A ranged weapon for hunting." : "A melee weapon matching their combat skills."}`);
         }
       }
     } catch {}
@@ -2406,8 +2994,17 @@ export class ColonyAgent {
 
   async manageWeapons(colonists, resources) {
     const fighters = colonists.filter((c) => !c.downed);
-    const unarmed = fighters.filter((c) => !c.weapon);
-    if (unarmed.length === 0) return;
+    const unarmed = fighters.filter((c) => {
+      if (!c.weapon) return true;
+      return (c.thoughts ?? []).some((t) => /despised weapon/i.test(String(t)));
+    });
+    if (unarmed.length === 0) {
+      if (this.weaponRush) {
+        this.weaponRush = false;
+        await this.syncWorkPlan(colonists);
+      }
+      return;
+    }
 
     // Equip anything already lying around before crafting more.
     try {
@@ -2448,7 +3045,18 @@ export class ColonyAgent {
       const res = await api.get("/research");
       const available = (res.available ?? []).map((a) => a.def ?? a.defName ?? a);
       if (available.length === 0) return;
-      const next = TECH_ORDER.find((t) => available.includes(t)) ?? available[0];
+      let voted = null;
+      try {
+        const response = await fetch(`${STUDIO_BASE}/api/events`, { signal: AbortSignal.timeout(1500) });
+        if (response.ok) {
+          const poll = (await response.json()).poll ?? {};
+          voted = Object.entries(poll)
+            .sort((a, b) => b[1] - a[1])
+            .map(([choice]) => available.find((project) => project.toLowerCase() === choice.toLowerCase()))
+            .find(Boolean) ?? null;
+        }
+      } catch {}
+      const next = voted ?? TECH_ORDER.find((t) => available.includes(t)) ?? available[0];
       if (next && next !== current?.project) {
         await api.post("/research", { project: next });
         await this.thought(`Research set to ${next}.`);
@@ -2461,6 +3069,8 @@ export class ColonyAgent {
     try {
       const res = await api.get("/traders");
       const traders = res.traders ?? [];
+      // desiredSpeed slows to 1 while a trader is here; nothing ever set this before, so it never did.
+      this.tradeOpen = traders.length > 0;
       if (traders.length === 0) return;
       const t = traders.find((x) => x.canTradeNow) ?? traders[0];
       const deal = await api.tryPost("/trade/auto", { trader: t.id ?? t.name });
@@ -2539,7 +3149,7 @@ export class ColonyAgent {
       // wall, because a pawn finishes every job at one priority before it looks at the next.
       const buildingWaiting = (this.pendingBuilds ?? 0) > 0;
       return { ...base,
-               PlantCutting: ripe ? 2 : 1,
+               PlantCutting: ripe || buildingWaiting ? 2 : 1,
                Growing: ripe ? 1 : 2,
                Cooking: buildingWaiting ? 2 : 1,
                Hunting: 2,
@@ -2609,6 +3219,8 @@ export class ColonyAgent {
     const slow = (why) => { this.speedReason = why; return 1; };
 
     if (threats.length > 0) return slow("hostiles on the map");
+    const due = scriptedThreatWindow(snap.tick ?? 0, this.storyteller);
+    if (due) return slow(`the storyteller's script is due: ${due.label}`);
     if (colonists.some((c) => c.downed || c.dead)) return slow("someone is down");
     if (colonists.some((c) => c.mentalState)) return slow("a colonist has broken");
     if ((snap.pendingLetters ?? 0) > 0) return slow("a letter is waiting on a decision");
@@ -2736,13 +3348,15 @@ export class ColonyAgent {
                         "Plant_TreeDrago", "Plant_TreeBamboo", "Plant_TreeCecropia", "Plant_TreePalm"];
       const pages = await Promise.all(treeDefs.map((d) =>
         api.get(`/things?def=${d}&detail=1&limit=300`).catch(() => ({}))));
+      const mine = this.agentTrees ?? new Set();
       const trees = pages
         .flatMap((r) => r.things ?? [])
-        .filter((t) => t.x != null && dist(t, b) < 70);
+        .filter((t) => t.x != null && dist(t, b) < 70 && mine.has(t.id));
       if (trees.length === 0) return;
       const r = await api.tryPost("/designate", { type: "cancel", things: trees.map((t) => t.id) });
+      for (const t of trees) mine.delete(t.id);
       if (r && (r.designated ?? 0) > 0) {
-        this.log(`Cleared ${r.designated} tree designation(s); food is now the only plant work.`);
+        this.log(`Cleared ${r.designated} of the agent's own tree designation(s); the colonist is close to collapse and food is the only plant work.`);
         // Cancelling can take food designations with it, so put those straight back.
         this.lastRoutine.delete("forage");
         await this.forage(this.base);
@@ -2778,25 +3392,23 @@ export class ColonyAgent {
    * direct path between the door and the fields, because a colonist who walks over their own
    * trap is a self inflicted casualty.
    */
+  /**
+   * Where the traps go: south of the warehouse door, off the path anyone walks. One list, shared
+   * with manageBase. There used to be two, under the same trap-0..trap-5 keys, and this one put
+   * three traps inside the warehouse's own footprint and the staging stockpile.
+   */
+  static TRAP_CELLS = [[-4, -11], [4, -11], [-2, -13], [2, -13], [-6, -9], [6, -9]];
+
   async manageDefenses(resources) {
     if (!this.every("defenses", 45)) return;
     const wood = resources.WoodLog ?? 0;
-    if (wood < 150) return;                       // walls and furniture come first
-    if (!this.placed.has("hut")) return;          // nothing to defend yet
+    if (wood < 150) return;                            // walls and furniture come first
+    if (!this.placed.has("room-warehouse")) return;    // the traps guard the warehouse door
     const b = this.base;
-    const built = this.builtDefs ?? new Set();
-    const have = built.has("TrapSpike") ? 1 : 0;
-    if (have && this.placed.has("trap-5")) return;
-
-    // An arc south of the hut, where raiders approach the door, two cells off the walls.
-    const spots = [
-      [b.x - 4, b.z - 6], [b.x - 2, b.z - 7], [b.x, b.z - 7],
-      [b.x + 2, b.z - 7], [b.x + 4, b.z - 6], [b.x + 5, b.z - 4],
-    ];
     let placed = 0;
-    for (let i = 0; i < spots.length; i++) {
-      const [x, z] = spots[i];
-      const r = await this.place(`trap-${i}`, "TrapSpike", x, z, { stuff: "WoodLog", force: true });
+    for (let i = 0; i < ColonyAgent.TRAP_CELLS.length; i++) {
+      const [dx, dz] = ColonyAgent.TRAP_CELLS[i];
+      const r = await this.place(`trap-${i}`, "TrapSpike", b.x + dx, b.z + dz, { stuff: "WoodLog", exact: true });
       if (r === "placed") placed++;
     }
     if (placed > 0) {
@@ -2820,8 +3432,15 @@ export class ColonyAgent {
     { old: "Campfire", replacedBy: ["FueledStove", "ElectricStove"], note: "a stove" },
   ];
 
-  /** Tear down anything a better building has superseded. */
-  async manageUpgrades() {
+  /**
+   * Tear down anything a better building has superseded.
+   *
+   * Sleeping spots are the exception to "one replacement retires them all": a spot is somebody's
+   * bed until there is a real bed for everyone, and a prisoner's spot is not a colonist's at all.
+   * Retiring every spot the moment the first Bed stood would have left a newcomer, and the day-6
+   * prisoner, sleeping on the ground.
+   */
+  async manageUpgrades(colonists = []) {
     if (!this.every("upgrades", 40)) return;
     const built = this.builtDefs ?? new Set();
     for (const u of ColonyAgent.UPGRADES) {
@@ -2829,7 +3448,14 @@ export class ColonyAgent {
       if (!u.replacedBy.some((d) => built.has(d))) continue;
       try {
         const res = await api.get(`/things?def=${u.old}&player=1&limit=20`);
-        const ids = (res.things ?? []).map((t) => t.id);
+        let retire = res.things ?? [];
+        if (u.old === "SleepingSpot") {
+          const beds = (await api.get("/things?cat=Building&player=1&def=Bed").catch(() => ({}))).things ?? [];
+          const colonistBeds = beds.filter((t) => !t.forPrisoners).length;
+          const prisonerBed = beds.some((t) => t.forPrisoners);
+          retire = retire.filter((t) => (t.forPrisoners ? prisonerBed : colonistBeds >= colonists.length));
+        }
+        const ids = retire.map((t) => t.id);
         if (ids.length === 0) continue;
         const r = await api.tryPost("/designate", { type: "deconstruct", things: ids });
         if (r && (r.designated ?? 0) > 0) {
@@ -2988,7 +3614,9 @@ export class ColonyAgent {
       if (/raid|manhunter|mad |infestation|mech|siege|drop pod/.test(label) || /Threat/.test(type)) {
         await this.thought(`Alert: ${l.label}.`);
         await this.narrate("alert", "incident", `${l.label}. Colonists: ${colonists.length}, armed: ${colonists.filter((c) => c.weapon).length}.`, 20000, { priority: "high" });
-      } else if (/dead|died|death|killed/.test(label)) {
+      } else if (/dead|died|death|killed|kidnap|lost/.test(label)) {
+        this.lastLoss = l.label;
+        this.journal("colonist-lost", { letter: l.label }, snap);
         await this.thought(`Loss: ${l.label}.`);
         await this.narrate("death", "colonist lost", `${l.label}. Colony size is now ${colonists.length}.`, 0, { priority: "high" });
       } else if (/trader|caravan|visitor/.test(label)) {
@@ -3041,20 +3669,13 @@ export class ColonyAgent {
   async manageGrowth(colonists, snap, resources) {
     const n = colonists.length;
 
-    // 1. Rescue anyone friendly lying downed on the map. An escape pod survivor who is left
-    //    where they fell dies there; rescued, they usually join.
-    if (this.every("rescue", 10)) await this.rescueDowned(colonists);
+    // Rescue, capture and quests run every turn from runTurn, in every phase: the first
+    // prisoner arrives on day 6, long before a colony of one reaches this phase.
 
-    // 2. Capture downed hostiles once there is somewhere to put them.
-    if (this.every("capture", 8)) await this.captureDowned(colonists, snap);
+    // A bed each, in a row that does not overlap the farms.
+    if (this.every("beds", 25)) await this.ensureBeds(colonists);
 
-    // 3. Accept quests that grant a colonist and cost nothing up front.
-    if (this.every("quests", 40)) await this.manageQuests(snap);
-
-    // 4. A bed each, in a row that does not overlap the farms.
-    if (this.every("beds", 25)) await this.ensureBeds(colonists, resources);
-
-    // 5. Food and cooking scale with population, not with a fixed field size.
+    // Food and cooking scale with population, not with a fixed field size.
     if (this.every("farm-scale", 60)) await this.manageFarms(n);
 
     if (n > (this.lastKnownPopulation ?? 1)) {
@@ -3065,7 +3686,7 @@ export class ColonyAgent {
       // New arrivals need settings, work priorities and a bed straight away.
       for (const c of colonists) this.configured.delete(`work-${c.id}`);
       await this.syncWorkPlan(colonists);
-      await this.ensureBeds(colonists, resources);
+      await this.ensureBeds(colonists);
     } else if (n < (this.lastKnownPopulation ?? 1)) {
       this.journal("population-down", { from: this.lastKnownPopulation, to: n, names: colonists.map((c) => c.name) }, snap);
       this.lastKnownPopulation = n;
@@ -3101,10 +3722,17 @@ export class ColonyAgent {
     if (hostiles.length === 0) return;
     const captor = colonists.find((c) => !c.downed && !c.drafted && (c.health?.pct ?? 1) > 0.5);
     if (!captor) return;
+    // Already carrying someone in: re-ordering the capture every few seconds restarts the walk.
+    if (/capture|carry/i.test(`${captor.job?.def ?? ""} ${captor.carrying ?? ""}`)) return;
     try {
-      const beds = await api.get("/things?cat=Building&player=1&def=Bed");
-      const prisonBed = (beds.things ?? []).find((t) => t.forPrisoners);
-      if (!prisonBed) return;                       // nowhere to put them yet
+      // A prisoner sleeping spot is as good as a prisoner bed for holding someone; only looking
+      // at beds meant the free spot placed for the day-6 raider was never used.
+      const places = await this.sleepingPlaces();
+      const prisonBed = places.find((t) => t.forPrisoners && !(t.occupants > 0));
+      if (!prisonBed) {
+        await this.ensurePrisonBed(snap, colonists);
+        return;                                     // nowhere to put them yet; try again next pass
+      }
       const target = hostiles.sort((a, b) => dist(a, this.base) - dist(b, this.base))[0];
       const r = await api.tryPost("/job", { pawn: captor.id, job: "Capture", targetA: target.id, targetB: prisonBed.id });
       if (r) {
@@ -3133,50 +3761,27 @@ export class ColonyAgent {
   }
 
   /**
-   * One bed per colonist plus one prison bed, laid out in rows north of the hut so they cannot
-   * land inside the rice or potato fields, which sit south of it.
+   * Somewhere to sleep for every colonist.
+   *
+   * Beds belong in bedrooms, and manageBase puts one in each bedroom as it closes, so this only
+   * covers the gap: when someone joins before their room is up, a free sleeping spot in the great
+   * hall beats the dirt outside. Prisoner beds are not colonists' beds and are not counted.
+   *
+   * This used to want one bed more than the colony had people and then turn "the furthest bed"
+   * into the prison bed, which for a colony of one is the founder's only bed. It never ran,
+   * because it lived behind the unreachable "grow" phase; the prison bed has its own routine now.
    */
-  async ensureBeds(colonists, resources) {
-    const wood = resources.WoodLog ?? 0;
-    if (wood < 45) return;
+  async ensureBeds(colonists) {
     const b = this.base;
-    let built = new Map();
-    try {
-      const sum = await api.get("/things/summary?cat=Building&player=1");
-      built = new Map((sum.groups ?? []).map((g) => [g.def, g.count]));
-    } catch {}
-    const bedCount = (built.get("Bed") ?? 0) + (built.get("DoubleBed") ?? 0) + (built.get("SleepingSpot") ?? 0);
-    const want = colonists.length + 1;                  // one spare, and the spare becomes the prison bed
-    if (bedCount >= want) return;
-
-    // Beds belong in bedrooms. manageBase places one in each bedroom the moment the room closes,
-    // so the only thing left here is cover for the gap: when someone joins before their room is
-    // up, a free sleeping spot in the great hall beats a bedroll on the dirt outside, and it is
-    // torn down again once a real bed exists for them.
-    const bedrooms = [...this.placed.keys()].filter((k) => /^room-bed\d+$/.test(k)).length;
-    const shortfall = want - Math.max(bedCount, 0);
-    if (shortfall > 0 && bedrooms * 1 < colonists.length) {
-      for (let i = 0; i < Math.min(shortfall, 4); i++) {
-        await this.place(`spot-${i}`, "SleepingSpot", b.x - 2 + i, b.z - 2, { exact: true });
-      }
-      await this.thought(`${colonists.length} colonists and ${bedCount} beds. Sleeping spots in the great hall until the bedrooms close; a spot beats the ground, a bed beats a spot.`);
+    let places = [];
+    try { places = await this.sleepingPlaces(); } catch { return; }
+    const forColonists = places.filter((t) => !t.forPrisoners).length;
+    const shortfall = colonists.length - forColonists;
+    if (shortfall <= 0) return;
+    for (let i = 0; i < Math.min(shortfall, 4); i++) {
+      await this.place(`spot-${forColonists + i}`, "SleepingSpot", b.x - 2 + i, b.z - 2, { exact: true, allowDuplicate: true });
     }
-
-    // The last bed becomes the prison bed, which is what makes recruiting possible at all.
-    if (!this.placed.has("prison-bed-set") && bedCount + 1 >= want) {
-      try {
-        const beds = await api.get("/things?cat=Building&player=1&def=Bed");
-        const list = (beds.things ?? []).filter((t) => !t.forPrisoners);
-        const far = list.sort((a, b2) => dist(b2, this.base) - dist(a, this.base))[0];
-        if (far) {
-          const r = await api.tryPost("/bed/settings", { thing: far.id, forPrisoners: true });
-          if (r) {
-            this.placed.set("prison-bed-set", {});
-            await this.thought("Marked the furthest bed as a prison bed so downed raiders can be captured and recruited.");
-          }
-        }
-      } catch {}
-    }
+    await this.thought(`${colonists.length} colonists and ${forColonists} places to sleep. Sleeping spots in the great hall until the bedrooms close; a spot beats the ground, a bed beats a spot.`);
   }
 
   /** Grow the fields as the colony grows. Roughly 6 growing cells per colonist per crop. */
@@ -3193,13 +3798,15 @@ export class ColonyAgent {
    */
   async manageFarms(population) {
     const b = this.base;
-    const wanted = Math.min(12, 5 + population * 2);   // rows per field
+    const wanted = Math.min(18, 5 + population * 2);   // rows per field
     const fields = [
       { key: "rice", plant: "Plant_Rice", label: "Rice", w: 7, h: wanted },
       { key: "potato", plant: "Plant_Potato", label: "Potatoes", w: 7, h: wanted },
-      // Healroot is medicine, and a colonist will walk across the map to sow it. It waits until
-      // there is food in store, because on day one that walk is time not spent eating.
+      ...(population >= 3 ? [{ key: "corn", plant: "Plant_Corn", label: "Corn", w: 9, h: wanted }] : []),
       ...((this.foodDays ?? 0) > 2.5 ? [{ key: "healroot", plant: "Plant_Healroot", label: "Healroot", w: 4, h: 4 }] : []),
+      ...(population >= 8 ? [{ key: "rice2", plant: "Plant_Rice", label: "Rice 2", w: 8, h: wanted }] : []),
+      ...(population >= 15 ? [{ key: "corn2", plant: "Plant_Corn", label: "Corn 2", w: 10, h: wanted }] : []),
+      ...(population >= 30 ? [{ key: "corn3", plant: "Plant_Corn", label: "Corn 3", w: 12, h: wanted }] : []),
     ];
 
     for (const f of fields) {
@@ -3281,13 +3888,15 @@ export class ColonyAgent {
       const pool = active.length > 0 ? active : living;
       const stale = Date.now() - this.followSince > 60000;
       const current = pool.find((c) => c.id === this.followTarget);
-      target = current && !stale ? current : pool[Math.floor(Math.random() * pool.length)];
+      target = current && !stale ? current : pool[0];
     }
-    if (target && (target.id !== this.followTarget || Date.now() - this.followSince > 60000)) {
+    if (target && (target.id !== this.followTarget || Date.now() - this.followSince > 60000 || combat !== this.followCombat)) {
+      const targetChanged = target.id !== this.followTarget;
       this.followTarget = target.id;
       this.followSince = Date.now();
-      await api.tryPost("/camera/follow", { pawn: target.id, enabled: true, deadzone: 2.5, speed: 4.5, zoom: combat ? 26 : 20 });
-      await api.tryPost("/select", { pawn: target.id });
+      this.followCombat = combat;
+      await api.tryPost("/camera/follow", { pawn: target.id, enabled: true, deadzone: 2.5, speed: 4.5, ...(combat ? { zoom: 26 } : {}) });
+      if (targetChanged) await api.tryPost("/select", { pawn: target.id });
     }
   }
 
@@ -3341,6 +3950,7 @@ async function main() {
     try {
       const snap = await api.get("/snapshot");
       agent.journal("run-stop", { reason: "signal" }, snap);
+      agent.endCause = agent.endCause ?? "agent stopped by a signal (the colony itself was still alive)";
       agent.writeRunSummary(snap);
       console.log(`Run summary: ${agent.journalPath?.replace(/\.jsonl$/, ".md")}`);
     } catch {}
