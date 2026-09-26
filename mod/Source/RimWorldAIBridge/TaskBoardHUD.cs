@@ -121,11 +121,10 @@ namespace RimWorldAIBridge
             float blockerH = string.IsNullOrEmpty(b) ? 0f : 18f;
             float h = headerH + goalH + display.Count * 19f + blockerH + 12f;
 
-            // Directly under the Twitch chat panel on the right edge, so the two stream-facing
-            // panels stack in one column and neither sits over the resource readout along the
-            // top of the screen, which is the player's own information.
+            // Directly under the Dubs Mint Minimap on the right edge, so the stream-facing
+            // panels stack cleanly in one column without overlapping the minimap window.
             float x = Screen.width - w - 8f;
-            float y = 8f + 250f + 8f;
+            float y = 350f;
             Rect box = new Rect(x, y, w, h);
 
             Widgets.DrawBoxSolidWithOutline(box, new Color(0.04f, 0.06f, 0.05f, 0.93f), new Color(0.30f, 0.55f, 0.38f, 0.6f), 1);

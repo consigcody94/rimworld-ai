@@ -81,7 +81,41 @@ namespace RimWorldAIBridge
                 var target = Lookup.ThingFrom(r, map, "target");
                 if (p.drafter != null && r.ArgBool("draft", true)) p.drafter.Drafted = true;
                 var action = FloatMenuUtility.GetAttackAction(p, new LocalTargetInfo(target), out string failStr);
-                if (action == null) throw new BridgeException("Cannot attack: " + (string.IsNullOrEmpty(failStr) ? "no valid attack" : failStr));
+                if (action == null)
+                {
+                    // A drafted ranged attack on a target out of range is refused outright rather
+                    // than walked into. For an archer, walking up and clubbing the target with the
+                    // bow is the wrong answer; walking to where the shot exists is the right one.
+                    // CastPositionFinder is what the game's own hunt job uses to pick that cell.
+                    var verb = p.equipment?.Primary != null && p.equipment.Primary.def.IsRangedWeapon ? p.TryGetAttackVerb(target) : null;
+                    if (verb != null && !verb.IsMeleeAttack)
+                    {
+                        var req = new CastPositionRequest
+                        {
+                            caster = p,
+                            target = target,
+                            verb = verb,
+                            maxRangeFromTarget = verb.verbProps.range * 0.9f,
+                            wantCoverFromTarget = true,
+                        };
+                        if (CastPositionFinder.TryFindCastPosition(req, out IntVec3 cell) && cell != p.Position)
+                        {
+                            var move = JobMaker.MakeJob(JobDefOf.Goto, cell);
+                            move.playerForced = true;
+                            if (p.jobs.TryTakeOrderedJob(move, JobTag.Misc))
+                                return Bridge.Ok("pawn", p.thingIDNumber, "target", target.thingIDNumber, "job", "Goto", "approaching", true, "cell", new[] { cell.x, cell.z });
+                        }
+                        throw new BridgeException("Cannot attack: " + (string.IsNullOrEmpty(failStr) ? "no firing position" : failStr) + ". Move closer first.");
+                    }
+                    // No ranged weapon: close in and fight hand to hand.
+                    var meleeJob = JobMaker.MakeJob(JobDefOf.AttackMelee, target);
+                    meleeJob.playerForced = true;
+                    if (p.jobs.TryTakeOrderedJob(meleeJob, JobTag.Misc))
+                    {
+                        return Bridge.Ok("pawn", p.thingIDNumber, "target", target.thingIDNumber, "job", "AttackMelee", "fallback", true);
+                    }
+                    throw new BridgeException("Cannot attack: " + (string.IsNullOrEmpty(failStr) ? "no valid attack" : failStr));
+                }
                 action();
                 return Bridge.Ok("pawn", p.thingIDNumber, "target", target.thingIDNumber, "job", p.CurJob?.def.defName);
             });

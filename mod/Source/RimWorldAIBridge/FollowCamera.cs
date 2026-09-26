@@ -23,7 +23,6 @@ namespace RimWorldAIBridge
         public static float ZoomSmoothSpeed = 1.4f;
         public static float DesiredZoom = 21.0f;
         public static DateTime ManualOverrideUntil = DateTime.MinValue;
-        private static bool settled;
         private static Vector3 anchor;
         private static bool anchorValid;
         private static int anchorTarget = -1;
@@ -33,7 +32,7 @@ namespace RimWorldAIBridge
 
         public static void SetTarget(Pawn p, float? zoom = null)
         {
-            if (!ReferenceEquals(Target, p)) { settled = false; anchorValid = false; }
+            if (!ReferenceEquals(Target, p)) anchorValid = false;
             Target = p;
             Enabled = true;
             if (zoom.HasValue)
@@ -41,6 +40,7 @@ namespace RimWorldAIBridge
                 DesiredZoom = zoom.Value;
                 ZoomOverrideUntil = DateTime.UtcNow.AddSeconds(45);
             }
+            else ZoomOverrideUntil = DateTime.MinValue;
         }
 
         public static void Update()
@@ -53,6 +53,7 @@ namespace RimWorldAIBridge
                 Input.GetKey(KeyCode.UpArrow) || Input.GetKey(KeyCode.DownArrow) || Input.GetKey(KeyCode.LeftArrow) || Input.GetKey(KeyCode.RightArrow))
             {
                 ManualOverrideUntil = DateTime.UtcNow.AddSeconds(3.0);
+                anchorValid = false;
             }
 
             if (DateTime.UtcNow < ManualOverrideUntil) return;
@@ -105,32 +106,26 @@ namespace RimWorldAIBridge
                 anchor = pawnPos;
                 anchorTarget = Target.thingIDNumber;
                 anchorValid = true;
-                settled = false;
             }
             anchor = Vector3.Lerp(anchor, pawnPos, Mathf.Clamp01(Time.deltaTime * AnchorSpeed));
 
             float dist = Vector2.Distance(new Vector2(camPos.x, camPos.z), new Vector2(anchor.x, anchor.z));
 
-            // Inside the settled band, hold position. Chasing sub-deadzone drift every frame is
-            // exactly what reads as shaking on stream.
-            if (settled && dist < Deadzone * 1.8f)
-            {
-                if (Mathf.Abs(cam.RootSize - DesiredZoom) > 0.4f)
-                    cam.SetRootPosAndSize(camPos, Mathf.Lerp(cam.RootSize, DesiredZoom, Time.deltaTime * ZoomSmoothSpeed));
-                return;
-            }
-
             if (dist > Deadzone)
             {
-                settled = false;
-                // Stage 2: the camera eases toward the anchor, never toward the raw pawn position.
-                Vector3 nextPos = Vector3.Lerp(camPos, anchor, Mathf.Clamp01(Time.deltaTime * SmoothSpeed));
+                // Move only partway into the deadzone. Chasing the pawn itself makes a working
+                // colonist oscillate around the centre and hides more of the area ahead.
+                Vector3 offset = anchor - camPos;
+                Vector3 destination = anchor - offset * (Deadzone * 0.45f / dist);
+                // A target on the other side of a large map should reframe at once rather than
+                // spend the next several seconds showing empty terrain during a long pan.
+                Vector3 nextPos = dist > 45f ? anchor :
+                    Vector3.Lerp(camPos, destination, Mathf.Clamp01(Time.deltaTime * SmoothSpeed));
                 float nextZoom = Mathf.Lerp(cam.RootSize, DesiredZoom, Mathf.Clamp01(Time.deltaTime * ZoomSmoothSpeed));
                 cam.SetRootPosAndSize(nextPos, nextZoom);
             }
             else
             {
-                settled = true;
                 if (Mathf.Abs(cam.RootSize - DesiredZoom) > 0.25f)
                     cam.SetRootPosAndSize(camPos, Mathf.Lerp(cam.RootSize, DesiredZoom, Mathf.Clamp01(Time.deltaTime * ZoomSmoothSpeed)));
             }
