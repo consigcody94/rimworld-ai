@@ -73,14 +73,17 @@ function pids(pattern) {
 
 /** The processes that make up this stack, found by what they are rather than by what we remember. */
 export const PROCESSES = {
-  game: "MacOS/RimWorld",
-  studio: "stream-app/server.mjs",
-  supervisor: "scripts/supervisor.mjs",
-  agent: "scripts/colony-agent.mjs",
-  capture: "stream-app/bin/capture-window",
-  relay: "stream-app/bin/rtmps-relay",
+  // Anchored to the start of the command line, so a shell, an editor or a grep whose arguments
+  // mention these paths never passes for the process itself. Live on 2026-09-26 a monitoring
+  // shell did exactly that, and `up` skipped both the mod install and launching the game.
+  game: "^[^ ]*RimWorld\\.app/Contents/MacOS/",
+  studio: "^[^ ]*node [^ ]*stream-app/server\\.mjs",
+  supervisor: "^[^ ]*node [^ ]*scripts/supervisor\\.mjs",
+  agent: "^[^ ]*node [^ ]*scripts/colony-agent\\.mjs",
+  capture: "^[^ ]*stream-app/bin/capture-window",
+  relay: "^[^ ]*stream-app/bin/rtmps-relay",
   // Our encoder is the only ffmpeg reading BGRA frames on stdin and PCM on fd 3.
-  encoder: "ffmpeg .*-pixel_format bgra.*pipe:3",
+  encoder: "^[^ ]*ffmpeg .*-pixel_format bgra.*pipe:3",
 };
 
 async function getJson(base, p, timeoutMs = 3000) {

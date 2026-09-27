@@ -48,8 +48,10 @@ async function httpJson(base, p, method = "GET", body = null) {
 }
 
 const shell = {
-  gameRunning: () => execSync("pgrep -f 'MacOS/RimWorld' || true").toString().trim().length > 0,
-  agentRunning: () => execSync("pgrep -f 'colony-agent.mjs' || true").toString().trim().length > 0,
+  // Anchored to the start of the command line: a shell or a grep whose arguments mention the
+  // path must never pass for the game or the agent (that mistake stopped a launch, live).
+  gameRunning: () => execSync("pgrep -f '^[^ ]*RimWorld\\.app/Contents/MacOS/' || true").toString().trim().length > 0,
+  agentRunning: () => execSync("pgrep -f '^[^ ]*node [^ ]*scripts/colony-agent\\.mjs' || true").toString().trim().length > 0,
   paused: () => fs.existsSync(path.join(ROOT, ".agent-state", "pause")),
   /** When the agent last finished starting a turn, or null if it has never said. */
   heartbeatAt() {
@@ -58,7 +60,7 @@ const shell = {
   },
   killAgent() {
     try {
-      const pids = execSync("pgrep -f 'node scripts/colony-agent.mjs' || true").toString().trim();
+      const pids = execSync("pgrep -f '^[^ ]*node [^ ]*scripts/colony-agent\\.mjs' || true").toString().trim();
       for (const raw of pids.split(/\s+/)) {
         const pid = Number(raw);
         if (Number.isInteger(pid) && pid > 0 && pid !== process.pid) {
@@ -79,7 +81,7 @@ const shell = {
   },
   stopAgent() {
     try {
-      const pids = execSync("pgrep -f 'node scripts/colony-agent.mjs' || true").toString().trim();
+      const pids = execSync("pgrep -f '^[^ ]*node [^ ]*scripts/colony-agent\\.mjs' || true").toString().trim();
       for (const raw of pids.split(/\s+/)) {
         const pid = Number(raw);
         if (Number.isInteger(pid) && pid > 0 && pid !== process.pid) {
